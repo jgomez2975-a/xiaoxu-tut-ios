@@ -1,0 +1,292 @@
+#!/bin/bash
+#
+# build_ish.sh —— 把 iSH 的 Linux 内核交叉编译成 iOS 静态库
+#
+# 只能在 macOS 上跑。原因不是懒，是 iSH 内核必须用 Apple 的 clang + iPhoneOS SDK
+# 编，Linux/Windows 上没有这套工具链。
+#
+# 用法：
+#   bash Tools/build_ish.sh            # 完整构建
+#   bash Tools/build_ish.sh --clean    # 先清再编
+#
+# 产物：
+#   Vendor/libishkernel.a   ← 我们的 Xcode 工程链接这一个就够了
+#
+# 前置：
+#   brew install meson ninja
+#   Xcode 命令行工具已装（xcode-select -p 有输出）
+#
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ISH="$ROOT/deps/ish"
+BUILD="$ISH/build-ios"
+VENDOR="$ROOT/Vendor"
+OBJ="$VENDOR/obj"
+APP="$ROOT/NpcLab"
+
+IOS_MIN="14.0"
+ARCH="arm64"
+
+say() { printf "\n\033[1;36m==> %s\033[0m\n" "$*"; }
+die() { printf "\n\033[1;31m!! %s\033[0m\n" "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# 0. 环境检查
+# ---------------------------------------------------------------------------
+say "检查工具链"
+
+[ "$(uname -s)" = "Darwin" ] || die "这个脚本只能在 macOS 上跑（需要 iPhoneOS SDK）"
+
+command -v xcrun >/dev/null || die "找不到 xcrun，请装 Xcode 或 Command Line Tools"
+SDK="$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)" || die "找不到 iPhoneOS SDK"
+[ -d "$SDK" ] || die "iPhoneOS SDK 路径无效：$SDK"
+echo "    SDK   : $SDK"
+
+if ! command -v meson >/dev/null; then
+    die "缺 meson。装一下：brew install meson ninja"
+fi
+if ! command -v ninja >/dev/null; then
+    die "缺 ninja。装一下：brew install meson ninja"
+fi
+echo "    meson : $(meson --version)"
+echo "    ninja : $(ninja --version)"
+
+[ -d "$ISH" ] || die "找不到 iSH 源码：$ISH"
+
+# ---------------------------------------------------------------------------
+# 1. Linux 头文件（iSH 的 sparse checkout，只拉内核头）
+# ---------------------------------------------------------------------------
+say "准备 Linux 头文件"
+if [ -d "$ISH/deps/linux/include" ] && [ -f "$ISH/deps/linux/Makefile" ]; then
+    echo "    已存在，跳过 clone"
+else
+    echo "    首次运行需要拉 ish-app/linux（约 1-2 分钟）"
+    # 不用 iSH 自带的 clone-linux.sh：那脚本依赖 git submodule，
+    # 而这里 deps/ish 是 vendored 源码（没有 .git），submodule 命令会报错。
+    rm -rf "$ISH/deps/linux"
+    git clone --depth=1 --sparse https://github.com/ish-app/linux "$ISH/deps/linux"
+    ( cd "$ISH/deps/linux" && git sparse-checkout set --no-cone --stdin < ../linux-sparse.txt )
+fi
+
+# ---------------------------------------------------------------------------
+# 2. 给 LinuxPTY.c 打补丁：加一个从 App 侧写 pty 的入口
+#    iSH 原本只有 App→内核的 tty_input，但没有从 linux_tty 反查 ptm 的公开函数，
+#    而终端要能敲键盘就必须有。补丁是幂等的，重复跑不会叠加。
+# ---------------------------------------------------------------------------
+say "检查 PTY 补丁"
+PTY_C="$ISH/app/LinuxPTY.c"
+if grep -q "npc_pty_write" "$PTY_C"; then
+    echo "    已打过"
+else
+    cat >> "$PTY_C" <<'PATCH'
+
+// ---- NpcLab: 从 App 侧往 pty 主端写（键盘输入）----
+// linux_tty 是 ios_pty 的成员，反推回 ios_pty 再写 ptm 就是标准 pty 语义。
+int npc_pty_write(struct linux_tty *ltty, const char *buf, size_t len) {
+    struct ios_pty *pty = container_of(ltty, struct ios_pty, linux_tty);
+    if (!pty || !pty->ptm)
+        return -EINVAL;
+    ssize_t n = kernel_write(pty->ptm, buf, len, NULL);
+    return (int) n;
+}
+PATCH
+    echo "    已追加 npc_pty_write()"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. meson 交叉编译配置
+# ---------------------------------------------------------------------------
+say "生成 meson 交叉文件"
+mkdir -p "$BUILD"
+
+CROSS="$BUILD/ios-cross.ini"
+cat > "$CROSS" <<EOF
+[binaries]
+c = 'clang'
+ar = 'ar'
+strip = 'strip'
+ranlib = 'ranlib'
+
+[host_machine]
+system = 'darwin'
+cpu_family = 'aarch64'
+cpu = 'arm64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+skip_sanity_check = true
+
+[built-in options]
+c_args = ['-target', '${ARCH}-apple-ios${IOS_MIN}', '-isysroot', '${SDK}', '-fblocks', '-fno-common', '-O2', '-Wno-everything']
+c_link_args = ['-target', '${ARCH}-apple-ios${IOS_MIN}', '-isysroot', '${SDK}']
+EOF
+echo "    $CROSS"
+
+# ---------------------------------------------------------------------------
+# 4. 编内核：liblinux.a + libfakefs.a + libish_emu.a
+#    这一步最慢，首次约 20-40 分钟（Kbuild 要编几千个头文件依赖）
+# ---------------------------------------------------------------------------
+say "配置 meson（kernel=linux engine=asbestos）"
+if [ "${1:-}" = "--clean" ]; then
+    rm -rf "$BUILD"
+    mkdir -p "$BUILD"
+    cat > "$CROSS" <<EOF
+[binaries]
+c = 'clang'
+ar = 'ar'
+strip = 'strip'
+ranlib = 'ranlib'
+
+[host_machine]
+system = 'darwin'
+cpu_family = 'aarch64'
+cpu = 'arm64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+skip_sanity_check = true
+
+[built-in options]
+c_args = ['-target', '${ARCH}-apple-ios${IOS_MIN}', '-isysroot', '${SDK}', '-fblocks', '-fno-common', '-O2', '-Wno-everything']
+c_link_args = ['-target', '${ARCH}-apple-ios${IOS_MIN}', '-isysroot', '${SDK}']
+EOF
+fi
+
+if [ -f "$BUILD/build.ninja" ]; then
+    meson setup --reconfigure "$BUILD" "$ISH" \
+        --cross-file "$CROSS" \
+        -Dkernel=linux -Dengine=asbestos -Dlog_handler=dprintf
+else
+    meson setup "$BUILD" "$ISH" \
+        --cross-file "$CROSS" \
+        -Dkernel=linux -Dengine=asbestos -Dlog_handler=dprintf
+fi
+
+say "开始编内核（第一次很慢，去喝杯咖啡）"
+ninja -C "$BUILD" deps/liblinux.a libfakefs.a libish_emu.a
+
+KERNEL_LIB="$BUILD/deps/liblinux.a"
+FAKEFS_LIB="$BUILD/libfakefs.a"
+EMU_LIB="$BUILD/libish_emu.a"
+
+for f in "$KERNEL_LIB" "$FAKEFS_LIB" "$EMU_LIB"; do
+    [ -f "$f" ] || die "构建产物缺失：$f"
+    printf "    %-40s %s\n" "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+done
+
+# ---------------------------------------------------------------------------
+# 5. 编 App 层：iSH 官方工程里由 libiSHLinux 这个 target 负责，但它绑死 Xcode
+#    pbxproj，这里按 app/StaticLibLinux.xcconfig 的参数手工编等价的一份。
+# ---------------------------------------------------------------------------
+say "编译 App 层（LinuxInterop / LinuxPTY / LinuxRoot / LinuxTTY / fakefs）"
+mkdir -p "$OBJ"
+rm -f "$OBJ"/*.o
+
+INC_FLAGS=(
+    -I"$ISH/deps/linux/arch/ish/include"
+    -I"$BUILD/deps/linux/arch/ish/include/generated"
+    -I"$ISH/deps/linux/include"
+    -I"$BUILD/deps/linux/include"
+    -I"$ISH/deps/linux/arch/ish/include/uapi"
+    -I"$BUILD/deps/linux/arch/ish/include/generated/uapi"
+    -I"$ISH/deps/linux/include/uapi"
+    -I"$ISH/deps/linux/arch/ish/include/generated/uapi"
+    -I"$ISH"
+    -I"$ISH/app"
+)
+
+KERNEL_FLAGS=(
+    -D__KERNEL__
+    -U__weak
+    -include linux/kconfig.h
+    -include linux/compiler_types.h
+    -Wno-gnu-variable-sized-type-not-at-end
+    -Wno-conditional-uninitialized
+)
+
+COMMON=(
+    -target "${ARCH}-apple-ios${IOS_MIN}"
+    -isysroot "$SDK"
+    -fblocks -fno-common -O2 -g0
+    -Wno-everything
+    -fmodules
+)
+
+APPSRC=(
+    "$ISH/app/LinuxInterop.c"
+    "$ISH/app/PasteboardDeviceLinux.c"
+    "$ISH/app/fakefs.c"
+    "$ISH/app/LinuxRoot.c"
+    "$ISH/app/LinuxTTY.c"
+    "$ISH/app/LinuxPTY.c"
+)
+
+for src in "${APPSRC[@]}"; do
+    name="$(basename "$src" .c)"
+    echo "    clang  $name.c"
+    clang -c "$src" -o "$OBJ/$name.o" \
+        "${COMMON[@]}" "${KERNEL_FLAGS[@]}" "${INC_FLAGS[@]}"
+done
+
+# ---------------------------------------------------------------------------
+# 6. 编我们自己的胶水层（App 侧，不带 __KERNEL__）
+# ---------------------------------------------------------------------------
+say "编译 NpcLinux.c（胶水层）"
+clang -c "$APP/Core/NpcLinux.c" -o "$OBJ/NpcLinux.o" \
+    -target "${ARCH}-apple-ios${IOS_MIN}" \
+    -isysroot "$SDK" \
+    -fblocks -fno-common -O2 -g0 \
+    -Wno-everything \
+    -DISH_LINUX=1 \
+    -I"$ISH/app" \
+    -I"$APP/Core"
+
+# ---------------------------------------------------------------------------
+# 7. 打包
+# ---------------------------------------------------------------------------
+say "合并静态库"
+mkdir -p "$VENDOR"
+
+# App 层先合成一个，再和内核合并；libtool 能处理多输入，但 DST 名不能重复
+libtool -static -o "$VENDOR/libiSHApp.a" "$OBJ"/*.o 2>/dev/null \
+    || ar rcs "$VENDOR/libiSHApp.a" "$OBJ"/*.o
+
+libtool -static -o "$VENDOR/libishkernel.a" \
+    "$KERNEL_LIB" "$FAKEFS_LIB" "$EMU_LIB" "$VENDOR/libiSHApp.a"
+# 注：iSH 官方工程用 -force_load 保证内核里那些"没人显式引用"的初始化段不被裁掉，
+#     Xcode 侧已配好，这里只负责把 .a 备齐。
+
+SIZE="$(du -h "$VENDOR/libishkernel.a" | cut -f1)"
+echo
+echo "    产物: $VENDOR/libishkernel.a  ($SIZE)"
+
+say "检查关键符号"
+for sym in run_kernel linux_start_session ios_pty_open actuate_kernel npc_pty_write FsInitialize; do
+    if nm -gU "$VENDOR/libishkernel.a" 2>/dev/null | grep -q " _${sym}\$"; then
+        echo "    ✓ $sym"
+    else
+        echo "    ✗ $sym  (缺了，链接会失败)"
+    fi
+done
+
+# 我们自己的符号应该在这里面
+if nm -gU "$VENDOR/libishkernel.a" 2>/dev/null | grep -q " _npc_linux_boot\$"; then
+    echo "    ✓ npc_linux_boot"
+else
+    echo "    ✗ npc_linux_boot  (NpcLinux.c 没编进去)"
+fi
+
+say "完成"
+cat <<EOF
+
+下一步：
+  python3 Tools/gen_xcodeproj.py     # 重新生成工程（会自动带上 Vendor/libishkernel.a）
+  open NpcLab.xcodeproj              # 或 bash Tools/build_ipa.sh
+
+注意：
+  · libishkernel.a 体积在 60-90MB 之间，是正常的（内核 + x86 模拟器 + fakefs）
+  · 首次真机启动要解压 139MB 的 alpine-rootfs.zip，大约 10-20 秒，之后走缓存
+EOF

@@ -1,0 +1,45 @@
+#!/bin/sh
+# npclab-edit —— 把文件交给 App 预览/编辑
+#
+# 跟 npclab-open 走同一套 OSC 1337 协议（宿主那边只认一种标记），
+# 区别只在语义：open 是「看一眼」，edit 是「我要改」。
+# 宿主侧 NpcLab 会按扩展名决定 fd：文本进编辑器，图片进标注，其它只读预览。
+#
+# 用法：
+#   npclab-edit notes.md
+#   npclab-edit /root/.ashrc
+#   echo hi > a.txt && npclab-edit a.txt
+
+ESC=$(printf '\033')
+BEL=$(printf '\007')
+
+if [ $# -eq 0 ]; then
+    echo "用法: npclab-edit <文件>..." >&2
+    exit 2
+fi
+
+rc=0
+for f in "$@"; do
+    if [ ! -e "$f" ]; then
+        printf 'npclab-edit: 不存在：%s\n' "$f" >&2
+        rc=1
+        continue
+    fi
+
+    # 相对路径必须补成绝对，宿主进程的 cwd 跟这里不是同一个
+    case "$f" in
+        /*) abs="$f" ;;
+        *)  abs="$PWD/$f" ;;
+    esac
+
+    if [ ! -f "$abs" ]; then
+        printf 'npclab-edit: 不是普通文件：%s\n' "$abs" >&2
+        rc=1
+        continue
+    fi
+
+    printf '%s]1337;NpcLabOpenURL=%s%s\n' "$ESC" "$abs" "$BEL"
+    printf '已交给 NpcLab：%s（%s 字节）\n' "$abs" "$(wc -c < "$abs" | tr -d ' ')"
+done
+
+exit $rc

@@ -1,0 +1,89 @@
+#!/bin/sh
+# npclab-pkg —— apk 的薄封装
+#
+# 为什么要包一层：iSH 上直接 apk add 有三个常见坑
+#   1. 忘了先 apk update，装到旧索引里的包
+#   2. 用了 --no-cache 又没网，报错信息看不懂
+#   3. 源不可达时不会自动回落到官方源
+#
+# 用法：
+#   npclab-pkg add curl git python3
+#   npclab-pkg del curl
+#   npclab-pkg search openssl
+#   npclab-pkg info curl
+#   npclab-pkg update
+#   npclab-pkg list
+#   npclab-pkg source           看当前用的源
+#   npclab-pkg source official  切回官方源
+#   npclab-pkg source cn        切回国内源
+
+REPO=/etc/apk/repositories
+V=3.21
+
+usage() {
+    sed -n '13,22p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+}
+
+need_net() {
+    if ! wget -q -T 5 -O /dev/null "https://mirrors.aliyun.com/alpine/v$V/main/" 2>/dev/null; then
+        printf '\033[33m网络似乎不通，apk 会失败。先用 npclab-net 查一下。\033[0m\n' >&2
+    fi
+}
+
+cmd="${1:-}"
+[ -n "$cmd" ] || usage
+shift 2>/dev/null || true
+
+case "$cmd" in
+    add|install)
+        [ $# -ge 1 ] || usage
+        need_net
+        apk update || printf '\033[31mapk update 失败，源可能不可达\033[0m\n' >&2
+        exec apk add "$@"
+        ;;
+    del|remove)
+        [ $# -ge 1 ] || usage
+        exec apk del "$@"
+        ;;
+    search)
+        [ $# -ge 1 ] || usage
+        apk update >/dev/null 2>&1 || true
+        exec apk search "$@"
+        ;;
+    info)
+        [ $# -ge 1 ] || usage
+        exec apk info "$@"
+        ;;
+    update|upgrade)
+        need_net
+        exec apk "$cmd"
+        ;;
+    list)
+        exec apk list --installed
+        ;;
+    source)
+        which="${1:-show}"
+        case "$which" in
+            show)
+                echo "当前源（$REPO）："
+                cat "$REPO"
+                ;;
+            official)
+                printf 'https://dl-cdn.alpinelinux.org/alpine/v%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/v%s/community\n' "$V" "$V" > "$REPO"
+                echo "已切到官方源，记得 apk update"
+                ;;
+            cn|aliyun)
+                printf 'https://mirrors.aliyun.com/alpine/v%s/main\nhttps://mirrors.aliyun.com/alpine/v%s/community\n' "$V" "$V" > "$REPO"
+                echo "已切到阿里云源，记得 apk update"
+                ;;
+            *)
+                echo "source 只认 show / official / cn" >&2
+                exit 2
+                ;;
+        esac
+        ;;
+    *)
+        usage
+        ;;
+esac

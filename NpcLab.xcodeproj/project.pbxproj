@@ -1,0 +1,971 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		D900F0B507CA8A4F4ADFEACE /* NpcLabApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE839F391AE9B181EC4F683C /* NpcLabApp.swift */; };
+		CE694936174582BA27C008F2 /* AppLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E12D5036B918DAFB0267958 /* AppLock.swift */; };
+		F1DB0CA7FD389C7B2F6FB6CE /* Attachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876D242CF9DC92D337C61F8D /* Attachment.swift */; };
+		83E537FCE42D5E57961D56BB /* BashismScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F92E50B8E70177C74B368CF /* BashismScanner.swift */; };
+		9D8D86ACD5C68E657DC9B07D /* Bridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09547EA6053D75987BDB9798 /* Bridge.swift */; };
+		19FBB52E7BCF44B7C6B87389 /* ChatEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E605EC9C19A71E727E025377 /* ChatEngine.swift */; };
+		748C0428B482D2ED03A842F6 /* LinuxRuntimeStub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EDFB5ED0E6CED84F6FA00AF /* LinuxRuntimeStub.swift */; };
+		D742137FF08BA0CA0943F3D1 /* LinuxTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E72405D6B8F01C4E30F2F8 /* LinuxTypes.swift */; };
+		7AD0BA3463BDACD308CC4796 /* LiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47736E2B13F1A15DBF9AAEE0 /* LiveActivity.swift */; };
+		29B3488A2C43B77B231C8250 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3AE8C41B9E4D0A1C3B92A65 /* Models.swift */; };
+		C7BD6CCA985BFE0A5671F165 /* NpcActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C090FF1C12CABE03303898D1 /* NpcActivityAttributes.swift */; };
+		A8BD09CB0E791B45829F289F /* OSC.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6946A6D453E13CB3BB9EF81 /* OSC.swift */; };
+		0063386997B06E998C79290C /* PromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB0A289DC9DA185D652DBAC /* PromptBuilder.swift */; };
+		B0718E4A8B2B3B06E9AA9B98 /* RootfsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 165EF9C5A32809D20E168C42 /* RootfsOverlay.swift */; };
+		86A34E3AD0E9D16374A3CD23 /* SkillMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A641B91D38180DEB1BFA5DA5 /* SkillMatcher.swift */; };
+		AFCF6BBE789227722517C386 /* Soul.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7396F8A69742580A2D4D860 /* Soul.swift */; };
+		1C0DD428E24497DF8C51FC72 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC58DECCEB5DD8D40CD0BB4 /* Store.swift */; };
+		9FF3345B0564001C72A23CB4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2801FD0A0208BE793BCEFB92 /* Theme.swift */; };
+		F251BED20A65C8F6F9092413 /* ToolAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E83708D6FAD434C94A0EC079 /* ToolAgent.swift */; };
+		77266DB758155AC060C7B586 /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48F0AE7515E222C7E08D34B9 /* VoiceInput.swift */; };
+		0A54112B9329655BBFE583EB /* WidgetBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 915ACC2EB4D172C71A721CCD /* WidgetBridge.swift */; };
+		56BDFC6FFDD217895285A4AD /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B0E3298FCCB3D330426521D /* Workspace.swift */; };
+		79D3E359761FCE9A6DCB8EA5 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5367EA2215139D4DC48C30A /* ChatView.swift */; };
+		4DC8489F993917DB97A0413F /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 140A2F1708113886883422A5 /* Components.swift */; };
+		07000914D7B017690450538D /* ImagePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05632937846BC5301AA2CC2 /* ImagePicker.swift */; };
+		8EA8B6EF0215C23F09D79E71 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1824C9397FAED77666412E9B /* LibraryView.swift */; };
+		1748AE103A850576D0B0BACA /* OpenSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E654DD41EBB87F8A54421181 /* OpenSheet.swift */; };
+		6C3B2C87305D067751092902 /* Panels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6773BED41CB4103CDD9A1976 /* Panels.swift */; };
+		ABEF78A875C43C22398565FA /* PanelsRev.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447BC2E8123637D9424470AC /* PanelsRev.swift */; };
+		F5CE9B610705BEC5C1A7DF76 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39AF8FE083AD173B94FF7EC1 /* SettingsView.swift */; };
+		D479BD4D6E7EC3F0619BF45C /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81EE1BE11991FA496CD8698F /* TerminalView.swift */; };
+		4371F6FD7FA1DCAFA2676E07 /* ThoughtView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22BE6E1CE601D5A4AFC85B1E /* ThoughtView.swift */; };
+		0D0EC06AE166660ABCC6A62F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7224126D5DD3115BAD04CDF1 /* Assets.xcassets */; };
+		C54CA241BA235EA5D40CE2E1 /* alpine-rootfs.zip in Resources */ = {isa = PBXBuildFile; fileRef = 2F83E0D7397807E34049A17A /* alpine-rootfs.zip */; };
+		05F7F5CB179D19A174A62F4B /* ar.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 9D7B94888B3C39A885008FC8 /* ar.lproj */; };
+		85528ADC47AAA30D17671CC7 /* bashism_rules.json in Resources */ = {isa = PBXBuildFile; fileRef = BE65A45943F6B6DE982B23D6 /* bashism_rules.json */; };
+		457A70544D456E3C93460532 /* de.lproj in Resources */ = {isa = PBXBuildFile; fileRef = B4A01DD04AE7679CCB8D9C11 /* de.lproj */; };
+		774434B8F8F84890CFBD5092 /* default_mount.json in Resources */ = {isa = PBXBuildFile; fileRef = BDA54537D7AD09FE338B2633 /* default_mount.json */; };
+		82B2626B61E00B6B34A2641B /* docs.json in Resources */ = {isa = PBXBuildFile; fileRef = 8C899CB95EDDA3D9F5CDE97D /* docs.json */; };
+		E8F60D8E38513F73BB35275A /* en.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A071B3AA5BADABED6A66763F /* en.lproj */; };
+		5777083466CB600EB701154C /* es.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 275E7743E4C276FA6471E688 /* es.lproj */; };
+		21F8BFBB9EED733E0298EA71 /* fr.lproj in Resources */ = {isa = PBXBuildFile; fileRef = F724C2BF73080D2216483D02 /* fr.lproj */; };
+		48A0995B63ADCAEEE1816208 /* hi.lproj in Resources */ = {isa = PBXBuildFile; fileRef = AF005212AF61C5790B6EBB32 /* hi.lproj */; };
+		320CBFDFE1A3CB335F738849 /* id.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 75B52A948F7220AA541FB1C7 /* id.lproj */; };
+		E2EB6FFF2759BE395F703BAB /* it.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 9A6CE6A82FADC2EC3C3158B3 /* it.lproj */; };
+		B49A43587677BBC4A972FD31 /* ja.lproj in Resources */ = {isa = PBXBuildFile; fileRef = C606D055F70DD06CF50BCE15 /* ja.lproj */; };
+		7E5ECE9415DA19A785E00692 /* ko.lproj in Resources */ = {isa = PBXBuildFile; fileRef = FFD0592CD0DC0130457729CB /* ko.lproj */; };
+		BFB71176685DB0B91B74DA92 /* nl.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 395C093CEB8EC53DF29D859A /* nl.lproj */; };
+		B3F877CB71E375D8F5CAD64F /* pack.json in Resources */ = {isa = PBXBuildFile; fileRef = 90C08B88C7E277B2BD95FAC1 /* pack.json */; };
+		DFF33ED078377830E16DAD1B /* persona.md in Resources */ = {isa = PBXBuildFile; fileRef = AF850D3B12802A8DD4C05B0A /* persona.md */; };
+		51F88C2DBCFABBD88AC71F4F /* presets.json in Resources */ = {isa = PBXBuildFile; fileRef = D97581A13FFF74B44A1B2406 /* presets.json */; };
+		5D6C250DFBC8D114C75C3A84 /* pt-BR.lproj in Resources */ = {isa = PBXBuildFile; fileRef = B7738FA74E8E4752CFA1FA88 /* pt-BR.lproj */; };
+		872D2F70DDB204191E093F85 /* ru.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 4FE406B2C4163742EF1F9A65 /* ru.lproj */; };
+		24FA3B742EB8CD8BF7029942 /* skillbody.json in Resources */ = {isa = PBXBuildFile; fileRef = 0D6387F338D478F1C6D30563 /* skillbody.json */; };
+		D65419C8D92A92E48E6973E6 /* skills.json in Resources */ = {isa = PBXBuildFile; fileRef = EE159AD91DCC1B055B0E37D8 /* skills.json */; };
+		8293F6E1FF96B1015D5D6F70 /* stats.json in Resources */ = {isa = PBXBuildFile; fileRef = 24E823B72CFCCA74D99360C8 /* stats.json */; };
+		3A0984FEE0422B33BE393A35 /* tail.md in Resources */ = {isa = PBXBuildFile; fileRef = 64759F481A73B156EDED80F3 /* tail.md */; };
+		6FC21A72A6A614872EC28E9A /* th.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 221E753C7857916150783E6C /* th.lproj */; };
+		95D6D331B7DF0157DAE3166A /* tools.json in Resources */ = {isa = PBXBuildFile; fileRef = FCA3F8D671EE7396E544816C /* tools.json */; };
+		4C695EC7D074EED94D665072 /* tr.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 54D585AEDF5B3901A371C1B0 /* tr.lproj */; };
+		F6E2043E5AACDE132256C5C1 /* vi.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 3E99BCD3198263798601F930 /* vi.lproj */; };
+		84A5766D88F4A596B348D95A /* zh-Hans.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 3777AB615EE6C22A1403CCD2 /* zh-Hans.lproj */; };
+		A7BB44E8EBBB67CDB7A7A5F6 /* zh-Hant.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 8BA75135FBB52E8B05E8BF96 /* zh-Hant.lproj */; };
+		E4AAB3143273F8B4AAD2FB96 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45035C430CD0816A1C37FAED /* ShareViewController.swift */; };
+		DEB24FBFBBE08E1B9F4CFA5C /* NpcFileProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21576E9B32502B1EBE9664E7 /* NpcFileProvider.swift */; };
+		ACC890DC684AEB01CB83B5AC /* NpcLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF2829996662E4BC523AF00D /* NpcLiveActivity.swift */; };
+		F7871FECF0EAC9B246062FCF /* NpcWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88F5F2551598AD004F8B0CC1 /* NpcWidget.swift */; };
+		994DE799D1814ECCAB2169A9 /* NpcActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C090FF1C12CABE03303898D1 /* NpcActivityAttributes.swift */; };
+		76123A457EF5863ED16D7D40 /* NpcLabShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 759FFF26DF3015887BF45642 /* NpcLabShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5937D1AED3AFBE2267938C51 /* NpcLabFileProvider.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 204935C514103134508A3269 /* NpcLabFileProvider.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		55664897405D91F3FBA702B9 /* NpcLabWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 556B97BCA3504FCF0EF12B91 /* NpcLabWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		F5BF48AA40CAD7891EB709FC /* NpcLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NpcLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		759FFF26DF3015887BF45642 /* NpcLabShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NpcLabShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		AF1746F69C1D93A65BAFC064 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Extensions/NpcLabShare/Info.plist; sourceTree = "<group>"; };
+		204935C514103134508A3269 /* NpcLabFileProvider.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NpcLabFileProvider.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A901F5D2D8A5C26D1C11A403 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Extensions/NpcLabFileProvider/Info.plist; sourceTree = "<group>"; };
+		556B97BCA3504FCF0EF12B91 /* NpcLabWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NpcLabWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		8E32F981793472B14829E2C4 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Extensions/NpcLabWidget/Info.plist; sourceTree = "<group>"; };
+		42808F345143D940192F2399 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		DE839F391AE9B181EC4F683C /* NpcLabApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NpcLabApp.swift; sourceTree = "<group>"; };
+		1E12D5036B918DAFB0267958 /* AppLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLock.swift; sourceTree = "<group>"; };
+		876D242CF9DC92D337C61F8D /* Attachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachment.swift; sourceTree = "<group>"; };
+		4F92E50B8E70177C74B368CF /* BashismScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BashismScanner.swift; sourceTree = "<group>"; };
+		09547EA6053D75987BDB9798 /* Bridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bridge.swift; sourceTree = "<group>"; };
+		E605EC9C19A71E727E025377 /* ChatEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatEngine.swift; sourceTree = "<group>"; };
+		3EDFB5ED0E6CED84F6FA00AF /* LinuxRuntimeStub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinuxRuntimeStub.swift; sourceTree = "<group>"; };
+		A5E72405D6B8F01C4E30F2F8 /* LinuxTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinuxTypes.swift; sourceTree = "<group>"; };
+		47736E2B13F1A15DBF9AAEE0 /* LiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivity.swift; sourceTree = "<group>"; };
+		C3AE8C41B9E4D0A1C3B92A65 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		C090FF1C12CABE03303898D1 /* NpcActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NpcActivityAttributes.swift; sourceTree = "<group>"; };
+		B6946A6D453E13CB3BB9EF81 /* OSC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSC.swift; sourceTree = "<group>"; };
+		EEB0A289DC9DA185D652DBAC /* PromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptBuilder.swift; sourceTree = "<group>"; };
+		165EF9C5A32809D20E168C42 /* RootfsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootfsOverlay.swift; sourceTree = "<group>"; };
+		A641B91D38180DEB1BFA5DA5 /* SkillMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillMatcher.swift; sourceTree = "<group>"; };
+		F7396F8A69742580A2D4D860 /* Soul.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Soul.swift; sourceTree = "<group>"; };
+		BAC58DECCEB5DD8D40CD0BB4 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
+		2801FD0A0208BE793BCEFB92 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		E83708D6FAD434C94A0EC079 /* ToolAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolAgent.swift; sourceTree = "<group>"; };
+		48F0AE7515E222C7E08D34B9 /* VoiceInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInput.swift; sourceTree = "<group>"; };
+		915ACC2EB4D172C71A721CCD /* WidgetBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetBridge.swift; sourceTree = "<group>"; };
+		5B0E3298FCCB3D330426521D /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workspace.swift; sourceTree = "<group>"; };
+		C5367EA2215139D4DC48C30A /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		140A2F1708113886883422A5 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		A05632937846BC5301AA2CC2 /* ImagePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePicker.swift; sourceTree = "<group>"; };
+		1824C9397FAED77666412E9B /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		E654DD41EBB87F8A54421181 /* OpenSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenSheet.swift; sourceTree = "<group>"; };
+		6773BED41CB4103CDD9A1976 /* Panels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels.swift; sourceTree = "<group>"; };
+		447BC2E8123637D9424470AC /* PanelsRev.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelsRev.swift; sourceTree = "<group>"; };
+		39AF8FE083AD173B94FF7EC1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		81EE1BE11991FA496CD8698F /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
+		22BE6E1CE601D5A4AFC85B1E /* ThoughtView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThoughtView.swift; sourceTree = "<group>"; };
+		A4DF2949AB2A7E1D8441719C /* NpcLinux.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NpcLinux.h; sourceTree = "<group>"; };
+		70143B995B3C1321D02F6B0D /* NpcUnzip.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NpcUnzip.h; sourceTree = "<group>"; };
+		B05DF0206A224415C78815DE /* NpcLab-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NpcLab-Bridging-Header.h; sourceTree = "<group>"; };
+		7224126D5DD3115BAD04CDF1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		2F83E0D7397807E34049A17A /* alpine-rootfs.zip */ = {isa = PBXFileReference; lastKnownFileType = archive.zip; path = alpine-rootfs.zip; sourceTree = "<group>"; };
+		9D7B94888B3C39A885008FC8 /* ar.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ar.lproj; sourceTree = "<group>"; };
+		BE65A45943F6B6DE982B23D6 /* bashism_rules.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = bashism_rules.json; sourceTree = "<group>"; };
+		B4A01DD04AE7679CCB8D9C11 /* de.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = de.lproj; sourceTree = "<group>"; };
+		BDA54537D7AD09FE338B2633 /* default_mount.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = default_mount.json; sourceTree = "<group>"; };
+		8C899CB95EDDA3D9F5CDE97D /* docs.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = docs.json; sourceTree = "<group>"; };
+		A071B3AA5BADABED6A66763F /* en.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = en.lproj; sourceTree = "<group>"; };
+		275E7743E4C276FA6471E688 /* es.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = es.lproj; sourceTree = "<group>"; };
+		F724C2BF73080D2216483D02 /* fr.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fr.lproj; sourceTree = "<group>"; };
+		AF005212AF61C5790B6EBB32 /* hi.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = hi.lproj; sourceTree = "<group>"; };
+		75B52A948F7220AA541FB1C7 /* id.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = id.lproj; sourceTree = "<group>"; };
+		9A6CE6A82FADC2EC3C3158B3 /* it.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = it.lproj; sourceTree = "<group>"; };
+		C606D055F70DD06CF50BCE15 /* ja.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ja.lproj; sourceTree = "<group>"; };
+		FFD0592CD0DC0130457729CB /* ko.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ko.lproj; sourceTree = "<group>"; };
+		395C093CEB8EC53DF29D859A /* nl.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = nl.lproj; sourceTree = "<group>"; };
+		90C08B88C7E277B2BD95FAC1 /* pack.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = pack.json; sourceTree = "<group>"; };
+		AF850D3B12802A8DD4C05B0A /* persona.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = persona.md; sourceTree = "<group>"; };
+		D97581A13FFF74B44A1B2406 /* presets.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = presets.json; sourceTree = "<group>"; };
+		B7738FA74E8E4752CFA1FA88 /* pt-BR.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = pt-BR.lproj; sourceTree = "<group>"; };
+		4FE406B2C4163742EF1F9A65 /* ru.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ru.lproj; sourceTree = "<group>"; };
+		0D6387F338D478F1C6D30563 /* skillbody.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = skillbody.json; sourceTree = "<group>"; };
+		EE159AD91DCC1B055B0E37D8 /* skills.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = skills.json; sourceTree = "<group>"; };
+		24E823B72CFCCA74D99360C8 /* stats.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = stats.json; sourceTree = "<group>"; };
+		64759F481A73B156EDED80F3 /* tail.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = tail.md; sourceTree = "<group>"; };
+		221E753C7857916150783E6C /* th.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = th.lproj; sourceTree = "<group>"; };
+		FCA3F8D671EE7396E544816C /* tools.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = tools.json; sourceTree = "<group>"; };
+		54D585AEDF5B3901A371C1B0 /* tr.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = tr.lproj; sourceTree = "<group>"; };
+		3E99BCD3198263798601F930 /* vi.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = vi.lproj; sourceTree = "<group>"; };
+		3777AB615EE6C22A1403CCD2 /* zh-Hans.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = zh-Hans.lproj; sourceTree = "<group>"; };
+		8BA75135FBB52E8B05E8BF96 /* zh-Hant.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = zh-Hant.lproj; sourceTree = "<group>"; };
+		45035C430CD0816A1C37FAED /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		21576E9B32502B1EBE9664E7 /* NpcFileProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NpcFileProvider.swift; sourceTree = "<group>"; };
+		EF2829996662E4BC523AF00D /* NpcLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NpcLiveActivity.swift; sourceTree = "<group>"; };
+		88F5F2551598AD004F8B0CC1 /* NpcWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NpcWidget.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXContainerItemProxy section */
+		025EBF0BCE297B43105D3152 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 46F86FAA6BBF9AC94A7E4595 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 83965988A1B0C979D0581ABE;
+			remoteInfo = NpcLabShare;
+		};
+		969E5A95076F9C436AE0AF33 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 46F86FAA6BBF9AC94A7E4595 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FCDAC381D3FF7A626614C0F0;
+			remoteInfo = NpcLabFileProvider;
+		};
+		0CCA7A30AADA209F940E7E41 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 46F86FAA6BBF9AC94A7E4595 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9BF6C6FCC8A176E96B2487A0;
+			remoteInfo = NpcLabWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		BAE1492BDE49D13FF7E211EB /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				76123A457EF5863ED16D7D40 /* NpcLabShare.appex in Embed Foundation Extensions */,
+				5937D1AED3AFBE2267938C51 /* NpcLabFileProvider.appex in Embed Foundation Extensions */,
+				55664897405D91F3FBA702B9 /* NpcLabWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7CC421A1DDB28E78FC2224AF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		507CA0D428934146AE5A9597 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3EEFED961373C1DC138DA72E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A6ABB82F6083913FC2F0E2D5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		7CB4F5C86BC1495BE5275A82 = {
+			isa = PBXGroup;
+			children = (
+				C80F8A76D3FC7063FEDC364C /* NpcLab */,
+				E8754416C8095456407CDC40 /* Extensions */,
+				F0220EF8F17ECEBD49AC2FAE /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F0220EF8F17ECEBD49AC2FAE /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F5BF48AA40CAD7891EB709FC /* NpcLab.app */,
+				759FFF26DF3015887BF45642 /* NpcLabShare.appex */,
+				204935C514103134508A3269 /* NpcLabFileProvider.appex */,
+				556B97BCA3504FCF0EF12B91 /* NpcLabWidget.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E8754416C8095456407CDC40 /* Extensions */ = {
+			isa = PBXGroup;
+			children = (
+				9AE90553185CAA9455FD88AC /* NpcLabFileProvider */,
+				2B1FDF7FBBC7B692CE6BD667 /* NpcLabShare */,
+				082585CC79A32DAF5E6079B9 /* NpcLabWidget */,
+			);
+			path = Extensions;
+			sourceTree = "<group>";
+		};
+		C80F8A76D3FC7063FEDC364C /* NpcLab */ = {
+			isa = PBXGroup;
+			children = (
+				B0DF1E5543E07264EA39A2A8 /* App */,
+				3690689B5640B28569CFFA01 /* Core */,
+				64E49CFE9A976FE230178F12 /* Resources */,
+				71371BC8E528FA9C4613F3EB /* Views */,
+				B05DF0206A224415C78815DE /* NpcLab-Bridging-Header.h */,
+				42808F345143D940192F2399 /* Info.plist */,
+			);
+			path = NpcLab;
+			sourceTree = "<group>";
+		};
+		9AE90553185CAA9455FD88AC /* NpcLabFileProvider */ = {
+			isa = PBXGroup;
+			children = (
+				21576E9B32502B1EBE9664E7 /* NpcFileProvider.swift */,
+				A901F5D2D8A5C26D1C11A403 /* Info.plist */,
+			);
+			path = NpcLabFileProvider;
+			sourceTree = "<group>";
+		};
+		2B1FDF7FBBC7B692CE6BD667 /* NpcLabShare */ = {
+			isa = PBXGroup;
+			children = (
+				45035C430CD0816A1C37FAED /* ShareViewController.swift */,
+				AF1746F69C1D93A65BAFC064 /* Info.plist */,
+			);
+			path = NpcLabShare;
+			sourceTree = "<group>";
+		};
+		082585CC79A32DAF5E6079B9 /* NpcLabWidget */ = {
+			isa = PBXGroup;
+			children = (
+				EF2829996662E4BC523AF00D /* NpcLiveActivity.swift */,
+				88F5F2551598AD004F8B0CC1 /* NpcWidget.swift */,
+				8E32F981793472B14829E2C4 /* Info.plist */,
+			);
+			path = NpcLabWidget;
+			sourceTree = "<group>";
+		};
+		B0DF1E5543E07264EA39A2A8 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				DE839F391AE9B181EC4F683C /* NpcLabApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		3690689B5640B28569CFFA01 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				1E12D5036B918DAFB0267958 /* AppLock.swift */,
+				876D242CF9DC92D337C61F8D /* Attachment.swift */,
+				4F92E50B8E70177C74B368CF /* BashismScanner.swift */,
+				09547EA6053D75987BDB9798 /* Bridge.swift */,
+				E605EC9C19A71E727E025377 /* ChatEngine.swift */,
+				3EDFB5ED0E6CED84F6FA00AF /* LinuxRuntimeStub.swift */,
+				A5E72405D6B8F01C4E30F2F8 /* LinuxTypes.swift */,
+				47736E2B13F1A15DBF9AAEE0 /* LiveActivity.swift */,
+				C3AE8C41B9E4D0A1C3B92A65 /* Models.swift */,
+				C090FF1C12CABE03303898D1 /* NpcActivityAttributes.swift */,
+				A4DF2949AB2A7E1D8441719C /* NpcLinux.h */,
+				70143B995B3C1321D02F6B0D /* NpcUnzip.h */,
+				B6946A6D453E13CB3BB9EF81 /* OSC.swift */,
+				EEB0A289DC9DA185D652DBAC /* PromptBuilder.swift */,
+				165EF9C5A32809D20E168C42 /* RootfsOverlay.swift */,
+				A641B91D38180DEB1BFA5DA5 /* SkillMatcher.swift */,
+				F7396F8A69742580A2D4D860 /* Soul.swift */,
+				BAC58DECCEB5DD8D40CD0BB4 /* Store.swift */,
+				2801FD0A0208BE793BCEFB92 /* Theme.swift */,
+				E83708D6FAD434C94A0EC079 /* ToolAgent.swift */,
+				48F0AE7515E222C7E08D34B9 /* VoiceInput.swift */,
+				915ACC2EB4D172C71A721CCD /* WidgetBridge.swift */,
+				5B0E3298FCCB3D330426521D /* Workspace.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		64E49CFE9A976FE230178F12 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				7224126D5DD3115BAD04CDF1 /* Assets.xcassets */,
+				2F83E0D7397807E34049A17A /* alpine-rootfs.zip */,
+				9D7B94888B3C39A885008FC8 /* ar.lproj */,
+				BE65A45943F6B6DE982B23D6 /* bashism_rules.json */,
+				B4A01DD04AE7679CCB8D9C11 /* de.lproj */,
+				BDA54537D7AD09FE338B2633 /* default_mount.json */,
+				8C899CB95EDDA3D9F5CDE97D /* docs.json */,
+				A071B3AA5BADABED6A66763F /* en.lproj */,
+				275E7743E4C276FA6471E688 /* es.lproj */,
+				F724C2BF73080D2216483D02 /* fr.lproj */,
+				AF005212AF61C5790B6EBB32 /* hi.lproj */,
+				75B52A948F7220AA541FB1C7 /* id.lproj */,
+				9A6CE6A82FADC2EC3C3158B3 /* it.lproj */,
+				C606D055F70DD06CF50BCE15 /* ja.lproj */,
+				FFD0592CD0DC0130457729CB /* ko.lproj */,
+				395C093CEB8EC53DF29D859A /* nl.lproj */,
+				90C08B88C7E277B2BD95FAC1 /* pack.json */,
+				AF850D3B12802A8DD4C05B0A /* persona.md */,
+				D97581A13FFF74B44A1B2406 /* presets.json */,
+				B7738FA74E8E4752CFA1FA88 /* pt-BR.lproj */,
+				4FE406B2C4163742EF1F9A65 /* ru.lproj */,
+				0D6387F338D478F1C6D30563 /* skillbody.json */,
+				EE159AD91DCC1B055B0E37D8 /* skills.json */,
+				24E823B72CFCCA74D99360C8 /* stats.json */,
+				64759F481A73B156EDED80F3 /* tail.md */,
+				221E753C7857916150783E6C /* th.lproj */,
+				FCA3F8D671EE7396E544816C /* tools.json */,
+				54D585AEDF5B3901A371C1B0 /* tr.lproj */,
+				3E99BCD3198263798601F930 /* vi.lproj */,
+				3777AB615EE6C22A1403CCD2 /* zh-Hans.lproj */,
+				8BA75135FBB52E8B05E8BF96 /* zh-Hant.lproj */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		71371BC8E528FA9C4613F3EB /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				C5367EA2215139D4DC48C30A /* ChatView.swift */,
+				140A2F1708113886883422A5 /* Components.swift */,
+				A05632937846BC5301AA2CC2 /* ImagePicker.swift */,
+				1824C9397FAED77666412E9B /* LibraryView.swift */,
+				E654DD41EBB87F8A54421181 /* OpenSheet.swift */,
+				6773BED41CB4103CDD9A1976 /* Panels.swift */,
+				447BC2E8123637D9424470AC /* PanelsRev.swift */,
+				39AF8FE083AD173B94FF7EC1 /* SettingsView.swift */,
+				81EE1BE11991FA496CD8698F /* TerminalView.swift */,
+				22BE6E1CE601D5A4AFC85B1E /* ThoughtView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		42AEFBAE01D2DFD981F7DA7D /* NpcLab */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F2F62AAE534BA46EC59716F3 /* Build configuration list for PBXNativeTarget "NpcLab" */;
+			buildPhases = (
+				303CCE6304B962FDAF287552 /* Sources */,
+				7CC421A1DDB28E78FC2224AF /* Frameworks */,
+				F964B4AC93F8CB0399137DF2 /* Resources */,
+				BAE1492BDE49D13FF7E211EB /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BE2ED22B20628A4924D2DB45 /* PBXTargetDependency */,
+				EA87D6F6FD35DB6DEC6025F2 /* PBXTargetDependency */,
+				587F555C19F9755A9CBFE8B0 /* PBXTargetDependency */,
+			);
+			name = NpcLab;
+			productName = NpcLab;
+			productReference = F5BF48AA40CAD7891EB709FC /* NpcLab.app */;
+			productType = "com.apple.product-type.application";
+		};
+		83965988A1B0C979D0581ABE /* NpcLabShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7361756E339189D2FBA5C14E /* Build configuration list for PBXNativeTarget "NpcLabShare" */;
+			buildPhases = (
+				DF97CD73892C8FC92D621638 /* Sources */,
+				507CA0D428934146AE5A9597 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NpcLabShare;
+			productName = NpcLabShare;
+			productReference = 759FFF26DF3015887BF45642 /* NpcLabShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		FCDAC381D3FF7A626614C0F0 /* NpcLabFileProvider */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0A590162C5B46C991030C1F7 /* Build configuration list for PBXNativeTarget "NpcLabFileProvider" */;
+			buildPhases = (
+				A0E66594797755DCBE12B122 /* Sources */,
+				3EEFED961373C1DC138DA72E /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NpcLabFileProvider;
+			productName = NpcLabFileProvider;
+			productReference = 204935C514103134508A3269 /* NpcLabFileProvider.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		9BF6C6FCC8A176E96B2487A0 /* NpcLabWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C2A3F200E8EFA539407F4FB8 /* Build configuration list for PBXNativeTarget "NpcLabWidget" */;
+			buildPhases = (
+				2193C4C1A3A63EFBE25C2BEA /* Sources */,
+				A6ABB82F6083913FC2F0E2D5 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NpcLabWidget;
+			productName = NpcLabWidget;
+			productReference = 556B97BCA3504FCF0EF12B91 /* NpcLabWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		46F86FAA6BBF9AC94A7E4595 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					42AEFBAE01D2DFD981F7DA7D = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					83965988A1B0C979D0581ABE = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					FCDAC381D3FF7A626614C0F0 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					9BF6C6FCC8A176E96B2487A0 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 7EF2517A8FE63F4681EC5EEA /* Build configuration list for PBXProject "NpcLab" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = zh_CN;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				zh_CN,
+				zh-Hans,
+				en,
+				Base,
+			);
+			mainGroup = 7CB4F5C86BC1495BE5275A82;
+			productRefGroup = F0220EF8F17ECEBD49AC2FAE /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				42AEFBAE01D2DFD981F7DA7D /* NpcLab */,
+				83965988A1B0C979D0581ABE /* NpcLabShare */,
+				FCDAC381D3FF7A626614C0F0 /* NpcLabFileProvider */,
+				9BF6C6FCC8A176E96B2487A0 /* NpcLabWidget */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F964B4AC93F8CB0399137DF2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0D0EC06AE166660ABCC6A62F /* Assets.xcassets in Resources */,
+				C54CA241BA235EA5D40CE2E1 /* alpine-rootfs.zip in Resources */,
+				05F7F5CB179D19A174A62F4B /* ar.lproj in Resources */,
+				85528ADC47AAA30D17671CC7 /* bashism_rules.json in Resources */,
+				457A70544D456E3C93460532 /* de.lproj in Resources */,
+				774434B8F8F84890CFBD5092 /* default_mount.json in Resources */,
+				82B2626B61E00B6B34A2641B /* docs.json in Resources */,
+				E8F60D8E38513F73BB35275A /* en.lproj in Resources */,
+				5777083466CB600EB701154C /* es.lproj in Resources */,
+				21F8BFBB9EED733E0298EA71 /* fr.lproj in Resources */,
+				48A0995B63ADCAEEE1816208 /* hi.lproj in Resources */,
+				320CBFDFE1A3CB335F738849 /* id.lproj in Resources */,
+				E2EB6FFF2759BE395F703BAB /* it.lproj in Resources */,
+				B49A43587677BBC4A972FD31 /* ja.lproj in Resources */,
+				7E5ECE9415DA19A785E00692 /* ko.lproj in Resources */,
+				BFB71176685DB0B91B74DA92 /* nl.lproj in Resources */,
+				B3F877CB71E375D8F5CAD64F /* pack.json in Resources */,
+				DFF33ED078377830E16DAD1B /* persona.md in Resources */,
+				51F88C2DBCFABBD88AC71F4F /* presets.json in Resources */,
+				5D6C250DFBC8D114C75C3A84 /* pt-BR.lproj in Resources */,
+				872D2F70DDB204191E093F85 /* ru.lproj in Resources */,
+				24FA3B742EB8CD8BF7029942 /* skillbody.json in Resources */,
+				D65419C8D92A92E48E6973E6 /* skills.json in Resources */,
+				8293F6E1FF96B1015D5D6F70 /* stats.json in Resources */,
+				3A0984FEE0422B33BE393A35 /* tail.md in Resources */,
+				6FC21A72A6A614872EC28E9A /* th.lproj in Resources */,
+				95D6D331B7DF0157DAE3166A /* tools.json in Resources */,
+				4C695EC7D074EED94D665072 /* tr.lproj in Resources */,
+				F6E2043E5AACDE132256C5C1 /* vi.lproj in Resources */,
+				84A5766D88F4A596B348D95A /* zh-Hans.lproj in Resources */,
+				A7BB44E8EBBB67CDB7A7A5F6 /* zh-Hant.lproj in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		303CCE6304B962FDAF287552 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D900F0B507CA8A4F4ADFEACE /* NpcLabApp.swift in Sources */,
+				CE694936174582BA27C008F2 /* AppLock.swift in Sources */,
+				F1DB0CA7FD389C7B2F6FB6CE /* Attachment.swift in Sources */,
+				83E537FCE42D5E57961D56BB /* BashismScanner.swift in Sources */,
+				9D8D86ACD5C68E657DC9B07D /* Bridge.swift in Sources */,
+				19FBB52E7BCF44B7C6B87389 /* ChatEngine.swift in Sources */,
+				748C0428B482D2ED03A842F6 /* LinuxRuntimeStub.swift in Sources */,
+				D742137FF08BA0CA0943F3D1 /* LinuxTypes.swift in Sources */,
+				7AD0BA3463BDACD308CC4796 /* LiveActivity.swift in Sources */,
+				29B3488A2C43B77B231C8250 /* Models.swift in Sources */,
+				C7BD6CCA985BFE0A5671F165 /* NpcActivityAttributes.swift in Sources */,
+				A8BD09CB0E791B45829F289F /* OSC.swift in Sources */,
+				0063386997B06E998C79290C /* PromptBuilder.swift in Sources */,
+				B0718E4A8B2B3B06E9AA9B98 /* RootfsOverlay.swift in Sources */,
+				86A34E3AD0E9D16374A3CD23 /* SkillMatcher.swift in Sources */,
+				AFCF6BBE789227722517C386 /* Soul.swift in Sources */,
+				1C0DD428E24497DF8C51FC72 /* Store.swift in Sources */,
+				9FF3345B0564001C72A23CB4 /* Theme.swift in Sources */,
+				F251BED20A65C8F6F9092413 /* ToolAgent.swift in Sources */,
+				77266DB758155AC060C7B586 /* VoiceInput.swift in Sources */,
+				0A54112B9329655BBFE583EB /* WidgetBridge.swift in Sources */,
+				56BDFC6FFDD217895285A4AD /* Workspace.swift in Sources */,
+				79D3E359761FCE9A6DCB8EA5 /* ChatView.swift in Sources */,
+				4DC8489F993917DB97A0413F /* Components.swift in Sources */,
+				07000914D7B017690450538D /* ImagePicker.swift in Sources */,
+				8EA8B6EF0215C23F09D79E71 /* LibraryView.swift in Sources */,
+				1748AE103A850576D0B0BACA /* OpenSheet.swift in Sources */,
+				6C3B2C87305D067751092902 /* Panels.swift in Sources */,
+				ABEF78A875C43C22398565FA /* PanelsRev.swift in Sources */,
+				F5CE9B610705BEC5C1A7DF76 /* SettingsView.swift in Sources */,
+				D479BD4D6E7EC3F0619BF45C /* TerminalView.swift in Sources */,
+				4371F6FD7FA1DCAFA2676E07 /* ThoughtView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF97CD73892C8FC92D621638 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E4AAB3143273F8B4AAD2FB96 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A0E66594797755DCBE12B122 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DEB24FBFBBE08E1B9F4CFA5C /* NpcFileProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2193C4C1A3A63EFBE25C2BEA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ACC890DC684AEB01CB83B5AC /* NpcLiveActivity.swift in Sources */,
+				F7871FECF0EAC9B246062FCF /* NpcWidget.swift in Sources */,
+				994DE799D1814ECCAB2169A9 /* NpcActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BE2ED22B20628A4924D2DB45 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 83965988A1B0C979D0581ABE /* NpcLabShare */;
+			targetProxy = 025EBF0BCE297B43105D3152 /* PBXContainerItemProxy */;
+		};
+		EA87D6F6FD35DB6DEC6025F2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FCDAC381D3FF7A626614C0F0 /* NpcLabFileProvider */;
+			targetProxy = 969E5A95076F9C436AE0AF33 /* PBXContainerItemProxy */;
+		};
+		587F555C19F9755A9CBFE8B0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9BF6C6FCC8A176E96B2487A0 /* NpcLabWidget */;
+			targetProxy = 0CCA7A30AADA209F940E7E41 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		96BBE0AE11FEDBC5E2960110 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B6888466AEA5E136F460CF40 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		2FDE3FC49A2383CE519824E1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = NpcLab/NpcLab.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/NpcLab/Core",
+					"$(SRCROOT)/deps/ish/app",
+				);
+				INFOPLIST_FILE = NpcLab/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.npclab.client;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "NpcLab/NpcLab-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		3016956865D7DC770FDA0C68 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = NpcLab/NpcLab.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/NpcLab/Core",
+					"$(SRCROOT)/deps/ish/app",
+				);
+				INFOPLIST_FILE = NpcLab/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.npclab.client;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "NpcLab/NpcLab-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F1C3A78271397E101023C8EE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Extensions/NpcLabShare/NpcLabShare.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/NpcLabShare/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.npclab.client.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D96BAEE5C4B3BD7566B4DA2A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Extensions/NpcLabShare/NpcLabShare.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/NpcLabShare/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.npclab.client.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		5D6179A5581F9A421AB45B91 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Extensions/NpcLabFileProvider/NpcLabFileProvider.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/NpcLabFileProvider/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.npclab.client.files;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		509691DBE2196221D5C51C4C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Extensions/NpcLabFileProvider/NpcLabFileProvider.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/NpcLabFileProvider/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.npclab.client.files;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		66A74E1012744489E855D65B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Extensions/NpcLabWidget/NpcLabWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/NpcLabWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "NpcLab";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.npclab.client.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		867A481C0D7E40FAEF918A80 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Extensions/NpcLabWidget/NpcLabWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/NpcLabWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "NpcLab";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.npclab.client.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7EF2517A8FE63F4681EC5EEA /* Build configuration list for PBXProject "NpcLab" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				96BBE0AE11FEDBC5E2960110 /* Debug */,
+				B6888466AEA5E136F460CF40 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F2F62AAE534BA46EC59716F3 /* Build configuration list for PBXNativeTarget "NpcLab" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2FDE3FC49A2383CE519824E1 /* Debug */,
+				3016956865D7DC770FDA0C68 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7361756E339189D2FBA5C14E /* Build configuration list for PBXNativeTarget "NpcLabShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F1C3A78271397E101023C8EE /* Debug */,
+				D96BAEE5C4B3BD7566B4DA2A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0A590162C5B46C991030C1F7 /* Build configuration list for PBXNativeTarget "NpcLabFileProvider" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5D6179A5581F9A421AB45B91 /* Debug */,
+				509691DBE2196221D5C51C4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C2A3F200E8EFA539407F4FB8 /* Build configuration list for PBXNativeTarget "NpcLabWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				66A74E1012744489E855D65B /* Debug */,
+				867A481C0D7E40FAEF918A80 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 46F86FAA6BBF9AC94A7E4595 /* Project object */;
+}

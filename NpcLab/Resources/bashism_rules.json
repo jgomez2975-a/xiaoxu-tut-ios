@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 1,
+  "target": "busybox ash (Alpine 3.21 / BusyBox 1.37)",
+  "_comment": "终端里贴 bash 脚本进来是最常见的翻车点。这里逐行匹配，命中就提示但不拦截——用户可能就是要跑 bash（apk add bash 之后确实能跑）。tier: S = 在 ash 下静默算错，最危险；E = 直接报错；T1 = 语义微妙，可能对可能错。正则限制在 ICU 子集内，不能有嵌套量词（ReDoS）。",
+  "rules": [
+    {
+      "id": "dbl-bracket",
+      "tier": "S",
+      "pattern": "\\[\\[\\s",
+      "hint": "[[ ]] 是 bash 专有，ash 会把它当外部命令 [ 处理，条件判断结果不对。改用 [ ]，字符串比较记得给变量加双引号。"
+    },
+    {
+      "id": "arith-command",
+      "tier": "E",
+      "pattern": "\\(\\(\\s*[^)\\s]",
+      "hint": "(( )) 算术命令 ash 不认。改用 $(( )) 做算术，或用 expr。"
+    },
+    {
+      "id": "function-keyword",
+      "tier": "T1",
+      "pattern": "^\\s*function\\s+[A-Za-z_]",
+      "hint": "function 关键字 ash 认，但后面跟括号的写法（function f() ）有的版本会报错。用 f() { } 最稳。"
+    },
+    {
+      "id": "array-assign",
+      "tier": "E",
+      "pattern": "^\\s*[A-Za-z_][A-Za-z0-9_]*=\\(",
+      "hint": "数组 ash 不支持。要存一组值，用空格分隔的字符串 + for 循环，或者 set -- a b c 走位置参数。"
+    },
+    {
+      "id": "array-expand",
+      "tier": "E",
+      "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\[[@*]\\]\\}",
+      "hint": "${arr[@]} 是数组展开，ash 没有数组。"
+    },
+    {
+      "id": "brace-expand-var",
+      "tier": "E",
+      "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\[[0-9]+\\]\\}",
+      "hint": "下标取元素是 bash 数组语法，ash 不支持。"
+    },
+    {
+      "id": "herestring",
+      "tier": "E",
+      "pattern": "<<<",
+      "hint": "<<< here-string 是 bash/zsh 的，ash 只认 << heredoc。改用 <<EOF。"
+    },
+    {
+      "id": "and-redirect",
+      "tier": "E",
+      "pattern": "&>\\s*[^&]",
+      "hint": "&> 是 bash 简写，ash 不认。改用 >file 2>&1。"
+    },
+    {
+      "id": "ansi-c-quote",
+      "tier": "E",
+      "pattern": "\\$'[^']*'",
+      "hint": "$'...' 是 bash 的 ANSI-C 引用，ash 会原样输出 $'...'。改用 printf 或直接放真实字符。"
+    },
+    {
+      "id": "case-convert",
+      "tier": "S",
+      "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*[\\^,]{1,2}\\}",
+      "hint": "${var^^} / ${var,,} 大小写转换 ash 不支持，会当成别的展开，结果是空字符串——不报错但算错。改用 tr。"
+    },
+    {
+      "id": "pattern-subst",
+      "tier": "E",
+      "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*//",
+      "hint": "${var//a/b} 全局替换是 bash 扩展，ash 只支持 ${var#pat} ${var%pat} 这类。用 sed。"
+    },
+    {
+      "id": "indirect-ref",
+      "tier": "E",
+      "pattern": "\\$\\{![A-Za-z_]",
+      "hint": "${!var} 间接引用 ash 不支持。改用 eval。"
+    },
+    {
+      "id": "declare-local",
+      "tier": "T1",
+      "pattern": "^\\s*(declare|typeset)\\s",
+      "hint": "declare/typeset 是 bash 的。ash 里用 local（只能在函数内）。"
+    },
+    {
+      "id": "local-flag",
+      "tier": "E",
+      "pattern": "\\blocal\\s+-[A-Za-z]",
+      "hint": "local 带选项（-n / -r / -a）ash 不支持。"
+    },
+    {
+      "id": "shopt",
+      "tier": "E",
+      "pattern": "\\bshopt\\b",
+      "hint": "shopt 是 bash 内建，ash 没有。"
+    },
+    {
+      "id": "let-command",
+      "tier": "S",
+      "pattern": "^\\s*let\\s+[A-Za-z_]",
+      "hint": "let 在 ash 里不是内建，会被当成外部命令找不到。改用 $(( ))。"
+    },
+    {
+      "id": "echo-e",
+      "tier": "T1",
+      "pattern": "\\becho\\s+-[neE]+\\s",
+      "hint": "echo 的 -e/-n 各 shell 行为不一致，busybox 认但语义有差别。要可靠就用 printf。"
+    },
+    {
+      "id": "source-builtin",
+      "tier": "T1",
+      "pattern": "^\\s*source\\s+\\S",
+      "hint": "source 是 bash 写法。ash 用 . file（点 + 空格）。"
+    },
+    {
+      "id": "mapfile",
+      "tier": "E",
+      "pattern": "\\b(mapfile|readarray)\\b",
+      "hint": "mapfile/readarray 是 bash 4+ 的，ash 没有。用 while read 循环。"
+    },
+    {
+      "id": "read-array",
+      "tier": "E",
+      "pattern": "\\bread\\s+(-[a-zA-Z]*a|--array)\\b",
+      "hint": "read -a 读进数组，ash 不支持。"
+    },
+    {
+      "id": "proc-subst",
+      "tier": "E",
+      "pattern": "[<>]\\(\\s*[a-zA-Z\"/]",
+      "hint": "<(cmd) / >(cmd) 进程替换是 bash 的，ash 不认。改用临时文件或管道。"
+    },
+    {
+      "id": "brace-range",
+      "tier": "T1",
+      "pattern": "\\{[0-9]+\\.\\.[0-9]+\\}",
+      "hint": "{1..10} 花括号展开是 bash 的，ash 会原样输出 {1..10}。改用 seq 或 while 循环。"
+    },
+    {
+      "id": "string-append",
+      "tier": "E",
+      "pattern": "^\\s*[A-Za-z_][A-Za-z0-9_]*\\+=",
+      "hint": "var+= 是 bash 扩展，ash 会当成命令名 += 报 not found。改用 var=\"$var\"新内容。"
+    },
+    {
+      "id": "coproc",
+      "tier": "E",
+      "pattern": "\\bcoproc\\b",
+      "hint": "coproc 是 bash 4+ 的，ash 没有。"
+    },
+    {
+      "id": "extglob",
+      "tier": "S",
+      "pattern": "[@*+?!]\\([^)]*\\)",
+      "hint": "@(a|b) 这类扩展通配是 bash extglob，ash 当普通字符处理，匹配结果不对。"
+    },
+    {
+      "id": "pipefail",
+      "tier": "T1",
+      "pattern": "set\\s+-o\\s+pipefail",
+      "hint": "busybox ash 支持 pipefail，但如果目标是别的精简 shell 就不一定。这里能用，提醒一下。"
+    },
+    {
+      "id": "pushd",
+      "tier": "T1",
+      "pattern": "\\b(pushd|popd|dirs)\\b",
+      "hint": "pushd/popd 在 busybox ash 里可用但行为跟 bash 有差异，长脚本别依赖。"
+    }
+  ]
+}

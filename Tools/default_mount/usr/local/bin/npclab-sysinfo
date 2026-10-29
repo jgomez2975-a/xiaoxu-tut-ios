@@ -1,0 +1,64 @@
+#!/bin/sh
+# npclab-sysinfo —— 一眼看完这台「手机上的 Linux」
+#
+# 只读，不改任何东西。iSH 的 /proc 是内核自己生成的，
+# 少数文件（如 /proc/cpuinfo）跟真机对不上属于正常。
+
+line() { printf '  %-14s %s\n' "$1" "$2"; }
+hr()   { printf '\033[2m%s\033[0m\n' "────────────────────────────────────────────"; }
+
+echo "NpcLab  ·  $(cat /etc/npclab/version 2>/dev/null | head -1)"
+hr
+
+line "内核" "$(uname -srm)"
+line "发行版" "Alpine $(cat /etc/alpine-release 2>/dev/null || echo '?')"
+line "主机名" "$(uname -n)"
+line "运行时长" "$(awk '{d=int($1/86400); h=int(($1%86400)/3600); m=int(($1%3600)/60); printf "%dd %dh %dm", d, h, m}' /proc/uptime 2>/dev/null || echo '?')"
+line "CPU" "$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ //' || nproc 2>/dev/null || echo '?')"
+line "核数" "$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo '?')"
+
+hr
+echo "  内存"
+if [ -r /proc/meminfo ]; then
+    awk '
+        /MemTotal:/     { t=$2 }
+        /MemAvailable:/ { a=$2 }
+        /MemFree:/      { f=$2 }
+        END {
+            if (t > 0) {
+                printf "    %-8s %8.1f MB\n", "总量",   t/1024
+                printf "    %-8s %8.1f MB\n", "可用",   a/1024
+                printf "    %-8s %8.1f MB  (%.0f%%)\n", "已用", (t-a)/1024, (t-a)*100/t
+            }
+        }' /proc/meminfo
+else
+    echo "    读不到 /proc/meminfo"
+fi
+
+hr
+echo "  磁盘"
+df -h 2>/dev/null | awk 'NR==1 || /\/$|rootfs|\/root|\/mnt/ {printf "    %-22s %6s %6s %5s %s\n", $6, $2, $4, $5, $1}'
+echo "  rootfs 在 App 沙箱里：Application Support/NpcLab/rootfs（fakefs，406MB 解压后）"
+
+hr
+echo "  已装包（前 12）"
+if command -v apk >/dev/null 2>&1; then
+    apk list --installed 2>/dev/null | head -12 | sed 's/^/    /'
+    n=$(apk list --installed 2>/dev/null | wc -l)
+    echo "    … 共 $n 个"
+else
+    echo "    没有 apk"
+fi
+
+hr
+echo "  关键命令"
+for c in sh ash apk python3 git curl wget r2 node; do
+    if command -v "$c" >/dev/null 2>&1; then
+        printf '    \033[32m✓\033[0m %-9s %s\n' "$c" "$(command -v $c)"
+    else
+        printf '    \033[2m·\033[0m %-9s 未安装\n' "$c"
+    fi
+done
+
+hr
+echo "  数据来源：iSH 内核（app 内进程），不是远程节点"

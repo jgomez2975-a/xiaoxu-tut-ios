@@ -1,0 +1,31 @@
+# 编译产物：内核静态库 60–90MB，不提交，自己编
+Vendor/*.a
+Vendor/obj/
+
+# iSH 编译过程产物
+deps/ish/build/
+deps/ish/build-ios/
+deps/ish/deps/linux/
+*.o
+*.a
+
+# rootfs：138.7MB，超过 GitHub 单文件 100MB 上限，改成 Tools/rootfs_parts/ 里的分段提交
+# 本地由 Tools/join_rootfs.sh 拼回来，build_ipa.sh 会自动调
+NpcLab/Resources/alpine-rootfs.zip
+NpcLab/Resources/alpine-rootfs.zip.joining
+
+# Xcode
+build/
+DerivedData/
+dist/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.ipa
+
+# 本地预览图（图标尺寸检查用）
+.preview/
+
+# 系统
+.DS_Store
+Thumbs.db

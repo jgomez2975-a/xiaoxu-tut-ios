@@ -1,0 +1,17 @@
+# NpcLab 交互 shell 配置
+# 由 ENV=$HOME/.ashrc 在非登录 shell 启动时载入（见 /etc/profile.d/npclab.sh）
+
+set -o vi 2>/dev/null || true
+
+HISTSIZE=1000
+HISTFILE="$HOME/.ash_history"
+
+alias ll='ls -alh'
+alias la='ls -A'
+alias l='ls -CF'
+alias ..='cd ..'
+alias ...='cd ../..'
+
+_NPC_ESC=$(printf '\033')
+PS1="${_NPC_ESC}[32mroot@npclab${_NPC_ESC}[0m:${_NPC_ESC}[34m\w${_NPC_ESC}[0m# "
+unset _NPC_ESC

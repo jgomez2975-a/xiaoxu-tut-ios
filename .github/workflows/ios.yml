@@ -1,0 +1,66 @@
+name: build-ipa
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
+          xcodebuild -version
+          python3 --version
+
+      - name: 资源存在性检查
+        run: |
+          for f in NpcLab/Resources/skills.json \
+                   NpcLab/Resources/skillbody.json \
+                   NpcLab/Resources/presets.json \
+                   NpcLab/Resources/tools.json \
+                   NpcLab/Resources/persona.md; do
+            test -f "$f" || { echo "缺 $f"; exit 1; }
+            ls -lh "$f"
+          done
+
+      - name: rootfs 检查
+        run: |
+          # 大文件不在 git 里，先按分段拼回 138.7MB 的 zip
+          bash Tools/join_rootfs.sh
+          du -h NpcLab/Resources/alpine-rootfs.zip
+          unzip -l NpcLab/Resources/alpine-rootfs.zip | tail -3
+
+      - name: 装 meson / ninja
+        run: brew install meson ninja || brew upgrade meson ninja
+
+      # 交叉编译 iSH 的 Linux 内核。第一次要 20-40 分钟，之后有缓存会快很多。
+      - name: 缓存 iSH 构建
+        uses: actions/cache@v4
+        with:
+          path: deps/ish/build-ios
+          key: ish-${{ runner.os }}-${{ hashFiles('deps/ish/meson.build') }}
+
+      - name: 编译 iSH 内核
+        run: bash Tools/build_ish.sh
+        timeout-minutes: 90
+
+      # 打包直接走 build_ipa.sh，跟本地一条路径：它会重生成工程、编 Release、
+      # 自检扩展/rootfs/内核符号/权限文案/18 种 .lproj，任何一项不过就 exit 1。
+      - name: 编译 + 打包 ipa
+        run: bash Tools/build_ipa.sh
+
+      - name: 产物清单
+        run: |
+          ls -lh dist/
+          unzip -l "dist/小徐TuT.ipa" | head -8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 小徐TuT-ipa
+          path: dist/小徐TuT.ipa
+          retention-days: 30

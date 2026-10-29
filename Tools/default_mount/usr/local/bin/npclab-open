@@ -1,0 +1,68 @@
+#!/bin/sh
+# npclab-open — 把 URL / 文件路径交给 NpcLab 宿主打开
+#
+# 原理：往 stdout 打一段 OSC 1337 转义序列，宿主终端解析后把它从显示内容里
+# 剥掉，再按类型路由到原生界面（http → WKWebView，图片 → 查看器，
+# pdf/office → QuickLook，其它 → 分享面板）。这是 iTerm2 的 OSC 1337 协议，
+# Minis 用的也是这一套。
+#
+# 序列格式：ESC ] 1337 ; NpcLabOpenURL = <url> BEL
+#   ESC = 0x1B，BEL = 0x07
+#
+# 同时兼任 xdg-open / sensible-browser / www-browser / $BROWSER 的替身。
+
+ESC=$(printf '\033')
+BEL=$(printf '\007')
+
+emit_marker() {
+    printf '%s]1337;NpcLabOpenURL=%s%s\n' "$ESC" "$1" "$BEL"
+}
+
+if [ $# -eq 0 ]; then
+    echo "用法: npclab-open <url|文件路径>..." >&2
+    exit 2
+fi
+
+rc=0
+for a in "$@"; do
+    case "$a" in
+        http://*|https://*|mailto:*|tel:*|sms:*|about:*|data:*)
+            emit_marker "$a"
+            printf '已在 NpcLab 中打开：%s\n' "$a"
+            ;;
+        /*)
+            if [ -e "$a" ]; then
+                emit_marker "$a"
+                printf '已打开：%s\n' "$a"
+            else
+                printf 'npclab-open: 不存在：%s\n' "$a" >&2
+                rc=1
+            fi
+            ;;
+        *://*)
+            emit_marker "$a"
+            printf '已打开：%s\n' "$a"
+            ;;
+        *)
+            if [ -e "$a" ]; then
+                # 相对路径要补成绝对，宿主那边才认得
+                emit_marker "$PWD/$a"
+                printf '已打开：%s\n' "$a"
+            else
+                case "$a" in
+                    *.*)
+                        emit_marker "https://$a"
+                        printf '已在 NpcLab 中打开：https://%s\n' "$a"
+                        ;;
+                    *)
+                        printf 'npclab-open: 无法识别的目标：%s\n' "$a" >&2
+                        rc=1
+                        ;;
+                esac
+            fi
+            ;;
+    esac
+done
+
+# 只要发出去了就返回 0——调用方应当认为"打开成功"
+exit $rc

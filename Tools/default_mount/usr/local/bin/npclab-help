@@ -1,0 +1,43 @@
+#!/bin/sh
+# npclab-help —— 这个 rootfs 里 NpcLab 自己加的东西
+#
+# 系统自带的命令（ls / grep / apk）不在这个列表里，用 `busybox --list` 看。
+
+ESC=$(printf '\033')
+B="${ESC}[1m"
+D="${ESC}[2m"
+G="${ESC}[32m"
+C="${ESC}[36m"
+Y="${ESC}[33m"
+R="${ESC}[0m"
+
+h() { printf '\n%s%s%s\n' "$B" "$1" "$R"; }
+c() { printf '  %s%-16s%s %s\n' "$C" "$1" "$R" "$2"; }
+
+printf '%s\n' "$D NpcLab · 手机里的 Alpine（iSH 内核，进程内运行）$R"
+
+h "打开东西"
+c npclab-open   "把网址/文件交给 App：网页用 WKWebView，图片用查看器，PDF/Office 用 QuickLook"
+c npclab-edit   "跟 open 一样，但语义是「要改」——文本会进编辑器"
+c xdg-open      "npclab-open 的别名（很多 Linux 程序找这个）"
+c sensible-browser "同上"
+c '\$BROWSER'    "已设为 npclab-open"
+
+h "包管理"
+c npclab-pkg    "apk 封装：add / del / search / info / update / list / source"
+c 'npclab-pkg add curl' "例：先 update 再装，失败会提示换源"
+
+h "看状态"
+c npclab-sysinfo "内核、内存、磁盘、包数、关键命令在不在"
+c npclab-net     "DNS / HTTP / 网卡三组探针"
+
+h "别的"
+c npclab-help    "就是这个"
+c 'cat /etc/npclab/version' "看 rootfs 与内核标记"
+c 'apk list --installed'    "看装了哪些包"
+
+h "提示"
+printf '  %s·%s 提示符是 %sroot@npclab%s，工作目录 /root\n' "$Y" "$R" "$G" "$R"
+printf '  %s·%s 分页器已设成 cat（没有完整 VT100，less 会花屏）\n' "$Y" "$R"
+printf '  %s·%s 断网也能用：这些东西全在本地 rootfs 里\n' "$Y" "$R"
+echo

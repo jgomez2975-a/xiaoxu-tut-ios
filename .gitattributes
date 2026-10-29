@@ -1,0 +1,19 @@
+# 统一换行：源码 LF，避免 Windows 上检出后脚本跑到一半报 ^M
+* text=auto eol=lf
+
+# 二进制：绝不能让 git 做换行转换或 diff
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.zip  binary
+*.a    binary
+*.dylib binary
+*.xcassets/** binary
+
+# rootfs 的分段文件（138.7MB 切成 4 段，见 Tools/join_rootfs.sh）
+Tools/rootfs_parts/*.part-* binary
+
+# GitHub 语言统计：不要把这些算进 Swift
+Tools/** linguist-documentation
+deps/** linguist-vendored

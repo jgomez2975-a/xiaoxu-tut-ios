@@ -1,0 +1,79 @@
+#!/bin/sh
+# npclab-net —— 网络诊断
+#
+# iSH 里没有 SLIRP，socket 直接调 Darwin 的 connect/listen/accept，
+# 所以走的是手机本身的网络。出问题多半是 DNS 或用户没给 App 网络权限。
+#
+# 用法：
+#   npclab-net            全量检查
+#   npclab-net dns        只查 DNS
+#   npclab-net http       只测 HTTP
+#   npclab-net route      看路由/网卡
+
+ok()   { printf '\033[32m  ✓ %s\033[0m\n' "$1"; }
+bad()  { printf '\033[31m  ✗ %s\033[0m\n' "$1"; }
+info() { printf '    %s\n' "$1"; }
+
+DNS_HOSTS="mirrors.aliyun.com dl-cdn.alpinelinux.org pypi.org github.com"
+
+check_dns() {
+    echo "DNS"
+    for h in $DNS_HOSTS; do
+        # nslookup 在 busybox 里有，但不一定装了 bind-tools
+        if command -v nslookup >/dev/null 2>&1; then
+            if nslookup "$h" >/dev/null 2>&1; then ok "$h"; else bad "$h"; fi
+        else
+            # 没有 nslookup 就用 wget 的域名解析当探针
+            if wget -q -T 4 -O /dev/null "https://$h/" 2>/dev/null; then
+                ok "$h"
+            else
+                # 有些站点拒 HEAD，退回 ping
+                if ping -c1 -W2 "$h" >/dev/null 2>&1; then ok "$h"; else bad "$h"; fi
+            fi
+        fi
+    done
+    echo "  解析器：$(cat /etc/resolv.conf 2>/dev/null | grep nameserver | tr '\n' ' ')"
+}
+
+check_http() {
+    echo "HTTP"
+    for u in https://mirrors.aliyun.com/alpine/ https://pypi.org/simple/; do
+        t0=$(date +%s)
+        if wget -q -T 8 -O /dev/null "$u" 2>/dev/null; then
+            t1=$(date +%s)
+            ok "$u  ($((t1 - t0))s)"
+        else
+            bad "$u"
+        fi
+    done
+}
+
+check_route() {
+    echo "网卡"
+    if command -v ip >/dev/null 2>&1; then
+        ip -o addr 2>/dev/null | awk '{printf "    %-8s %s\n", $2, $4}'
+        echo "  默认路由："
+        ip route 2>/dev/null | grep default | sed 's/^/    /'
+    elif command -v ifconfig >/dev/null 2>&1; then
+        ifconfig 2>/dev/null | grep -E '^[a-z]|inet ' | sed 's/^/    /'
+    else
+        info "没有 ip / ifconfig，看 /proc/net/dev："
+        cat /proc/net/dev 2>/dev/null | sed 's/^/    /'
+    fi
+}
+
+case "${1:-all}" in
+    dns)   check_dns ;;
+    http)  check_http ;;
+    route) check_route ;;
+    all)
+        check_route
+        echo
+        check_dns
+        echo
+        check_http
+        echo
+        info "iSH 的 socket 直通宿主，不走 SLIRP。全挂的话先看 App 有没有网络权限。"
+        ;;
+    *) sed -n '7,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

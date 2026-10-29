@@ -1,0 +1,15 @@
+
+  _   _            _          _
+ | \ | | _ __   ___| |    __ _| |__
+ |  \| || '_ \ / __| |   / _` | '_ \
+ | |\  || |_) | (__| |__| (_| | |_) |
+ |_| \_|| .__/ \___|_____\__,_|_.__/
+        |_|
+  Alpine Linux on NpcLab (iSH kernel, in-process)
+
+  npclab-help    看有哪些命令
+  npclab-pkg     装包（apk 封装）
+  npclab-sysinfo 看机器信息
+  npclab-open    把文件/网址丢给 App 打开
+  npclab-edit    把文件丢给 App 预览编辑
+

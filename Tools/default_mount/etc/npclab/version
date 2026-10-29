@@ -1,0 +1,4 @@
+NpcLab iOS
+rootfs=alpine-3.21.8
+kernel=ish (linux personality, asbestos x86 emu)
+built-by=Tools/gen_mount.py
