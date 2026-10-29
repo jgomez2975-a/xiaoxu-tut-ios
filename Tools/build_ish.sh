@@ -52,6 +52,38 @@ fi
 echo "    meson : $(meson --version)"
 echo "    ninja : $(ninja --version)"
 
+# VDSO 要编成 i386 ELF 共享库塞进模拟进程地址空间，只能用 clang + lld 交叉编。
+# Xcode 自带的 clang 不认 -fuse-ld=lld，缺 llvm 会停在 deps/ish/vdso/meson.build:19。
+LLVM_PREFIX=""
+for p in /opt/homebrew/opt/llvm /usr/local/opt/llvm /opt/local; do
+    if [ -x "$p/bin/clang" ]; then
+        LLVM_PREFIX="$p"
+        break
+    fi
+done
+[ -n "$LLVM_PREFIX" ] || die "缺 LLVM（VDSO 需要 clang+lld）。装一下：brew install llvm lld"
+
+# Homebrew 从 llvm 19 起把 lld 拆成独立公式，ld.lld 不一定在 llvm/bin 里
+LLD_DIR=""
+for d in "$LLVM_PREFIX/bin" /opt/homebrew/opt/lld/bin /opt/homebrew/bin /usr/local/opt/lld/bin; do
+    if [ -x "$d/ld.lld" ]; then
+        LLD_DIR="$d"
+        break
+    fi
+done
+[ -n "$LLD_DIR" ] || die "缺 ld.lld（clang 找不到 -fuse-ld=lld）。装一下：brew install lld"
+
+# 让 clang 在 PATH 里找到 ld.lld
+export PATH="$LLVM_PREFIX/bin:$LLD_DIR:$PATH"
+echo "    llvm  : $LLVM_PREFIX  ($("$LLVM_PREFIX/bin/clang" --version | head -1))"
+echo "    lld   : $LLD_DIR/ld.lld"
+
+# 前置跑一遍 iSH 自带的探测，它过了 VDSO 就一定编得出来
+if ! bash "$ISH/vdso/check-cc.sh" "$LLVM_PREFIX/bin/clang" >/dev/null 2>&1; then
+    die "VDSO 编译器自检失败：$LLVM_PREFIX/bin/clang 无法 -target i386-linux -fuse-ld=lld"
+fi
+echo "    vdso  : 自检通过"
+
 [ -d "$ISH" ] || die "找不到 iSH 源码：$ISH"
 
 # ---------------------------------------------------------------------------
@@ -166,13 +198,17 @@ else
 fi
 
 say "开始编内核（第一次很慢，去喝杯咖啡）"
-ninja -C "$BUILD" deps/liblinux.a libfakefs.a libish_emu.a
+# liblinux_user.a 不能漏：emu_run / emu_mmu_init / emu_switch_mm 这一整套
+# 模拟引擎入口在 linux/emu_asbestos.c 里，meson 把它编进独立的 linux_user
+# 目标，不在 liblinux.a 也不在 libish_emu.a 里，漏了就一片 undefined symbol。
+ninja -C "$BUILD" deps/liblinux.a libfakefs.a libish_emu.a liblinux_user.a
 
 KERNEL_LIB="$BUILD/deps/liblinux.a"
 FAKEFS_LIB="$BUILD/libfakefs.a"
 EMU_LIB="$BUILD/libish_emu.a"
+USER_LIB="$BUILD/liblinux_user.a"
 
-for f in "$KERNEL_LIB" "$FAKEFS_LIB" "$EMU_LIB"; do
+for f in "$KERNEL_LIB" "$FAKEFS_LIB" "$EMU_LIB" "$USER_LIB"; do
     [ -f "$f" ] || die "构建产物缺失：$f"
     printf "    %-40s %s\n" "$(basename "$f")" "$(du -h "$f" | cut -f1)"
 done
@@ -212,21 +248,33 @@ COMMON=(
     -isysroot "$SDK"
     -fblocks -fno-common -O2 -g0
     -Wno-everything
-    -fmodules
 )
+# 注意：这里一定不能加 -fmodules。iSH 官方 StaticLibLinux.xcconfig 里
+# 有一行 "disable modules because it results in clashes between linux and
+# clang headers"，开了之后 Darwin 模块里的 struct termios / stat / rlimit
+# 会和 Linux 内核头里的同名结构体撞成 "incompatible definitions"。
 
+# app/ 下属于 libiSHLinux 的源文件。fakefs.c 在 linux/ 目录，已经由 meson
+# 编进 libfakefs.a；hook.c 是 macOS 专用的 mach 异常钩子，iOS 不用。
+#
+# CurrentRoot.m 也不编：它同时 #import <Foundation/Foundation.h> 和
+# #include "kernel/calls.h"，在 kernel=linux 真内核模式下那套头是完整
+# Linux 内核头，两套必然撞（__attribute__ 被重定义、一堆 typedef
+# redefinition）。它唯一必须提供的是 FsInitialize()，而这个函数只做
+# iSH 的 /ish/version 迁移判断 —— 我们的 rootfs 是整包固定的，用不着。
+# 空实现放在 NpcLinux.c 里。
 APPSRC=(
     "$ISH/app/LinuxInterop.c"
     "$ISH/app/PasteboardDeviceLinux.c"
-    "$ISH/app/fakefs.c"
     "$ISH/app/LinuxRoot.c"
     "$ISH/app/LinuxTTY.c"
     "$ISH/app/LinuxPTY.c"
 )
 
 for src in "${APPSRC[@]}"; do
-    name="$(basename "$src" .c)"
-    echo "    clang  $name.c"
+    base="$(basename "$src")"
+    name="${base%.*}"
+    echo "    clang  $base"
     clang -c "$src" -o "$OBJ/$name.o" \
         "${COMMON[@]}" "${KERNEL_FLAGS[@]}" "${INC_FLAGS[@]}"
 done
@@ -247,46 +295,63 @@ clang -c "$APP/Core/NpcLinux.c" -o "$OBJ/NpcLinux.o" \
 # ---------------------------------------------------------------------------
 # 7. 打包
 # ---------------------------------------------------------------------------
-say "合并静态库"
+say "备齐静态库"
 mkdir -p "$VENDOR"
 
-# App 层先合成一个，再和内核合并；libtool 能处理多输入，但 DST 名不能重复
+# App 层这 6 个 .o 名字互不相同，合成一个库是安全的
 libtool -static -o "$VENDOR/libiSHApp.a" "$OBJ"/*.o 2>/dev/null \
     || ar rcs "$VENDOR/libiSHApp.a" "$OBJ"/*.o
 
-libtool -static -o "$VENDOR/libishkernel.a" \
-    "$KERNEL_LIB" "$FAKEFS_LIB" "$EMU_LIB" "$VENDOR/libiSHApp.a"
-# 注：iSH 官方工程用 -force_load 保证内核里那些"没人显式引用"的初始化段不被裁掉，
-#     Xcode 侧已配好，这里只负责把 .a 备齐。
+# 内核三个库必须原样分开放，绝对不能 libtool 合并成一个：
+# 内核里有几十组同名目标文件（init/main.o 与 drivers/base/firmware_loader/
+# main.o、fs/proc/version.o 与 init/version.o、各种 util.o / sync.o …），
+# libtool 合并时按成员名去重，后加入的那份直接被丢掉。run_kernel 就在
+# init/main.o 里，一合并就没了，链接时报 undefined symbol。
+cp -f "$KERNEL_LIB"  "$VENDOR/liblinux.a"
+cp -f "$FAKEFS_LIB"  "$VENDOR/libfakefs.a"
+cp -f "$EMU_LIB"     "$VENDOR/libish_emu.a"
+cp -f "$USER_LIB"    "$VENDOR/liblinux_user.a"
 
-SIZE="$(du -h "$VENDOR/libishkernel.a" | cut -f1)"
-echo
-echo "    产物: $VENDOR/libishkernel.a  ($SIZE)"
+# 旧的合并产物要清掉，免得 Xcode 还按老路径 -force_load 到一个缺符号的库
+rm -f "$VENDOR/libishkernel.a"
 
-say "检查关键符号"
-for sym in run_kernel linux_start_session ios_pty_open actuate_kernel npc_pty_write FsInitialize; do
-    if nm -gU "$VENDOR/libishkernel.a" 2>/dev/null | grep -q " _${sym}\$"; then
-        echo "    ✓ $sym"
-    else
-        echo "    ✗ $sym  (缺了，链接会失败)"
-    fi
+for f in liblinux.a libfakefs.a libish_emu.a liblinux_user.a libiSHApp.a; do
+    printf "    %-20s %s\n" "$f" "$(du -h "$VENDOR/$f" | cut -f1)"
 done
 
-# 我们自己的符号应该在这里面
-if nm -gU "$VENDOR/libishkernel.a" 2>/dev/null | grep -q " _npc_linux_boot\$"; then
-    echo "    ✓ npc_linux_boot"
-else
-    echo "    ✗ npc_linux_boot  (NpcLinux.c 没编进去)"
-fi
+say "检查关键符号"
+# 注意用 nm -g 而不是 nm -gU：macOS 的 -U 只列「未定义」符号。run_kernel
+# 在内核里没有任何 .o 引用它（只有外层的 actuate_kernel 调），所以既不在
+# 未定义列表里、又被 -U 过滤掉了已定义的那份，结果被误报成缺失。
+SYM_LIBS=("$KERNEL_LIB" "$FAKEFS_LIB" "$EMU_LIB" "$USER_LIB" "$VENDOR/libiSHApp.a")
+NM_DUMP="$(mktemp -d)"
+for lib in "${SYM_LIBS[@]}"; do
+    nm -g "$lib" > "$NM_DUMP/$(basename "$lib").nm" 2>/dev/null || true
+done
+for sym in run_kernel emu_run emu_mmu_init emu_switch_mm async_do_in_ios linux_start_session ios_pty_open actuate_kernel npc_pty_write FsInitialize npc_linux_boot; do
+    where=""
+    for lib in "${SYM_LIBS[@]}"; do
+        if grep -q " _${sym}\$" "$NM_DUMP/$(basename "$lib").nm"; then
+            where="$(basename "$lib")"
+            break
+        fi
+    done
+    if [ -n "$where" ]; then
+        echo "    ✓ $sym  [$where]"
+    else
+        echo "    ✗ $sym  (所有库里都没有)"
+    fi
+done
+rm -rf "$NM_DUMP"
 
 say "完成"
 cat <<EOF
 
 下一步：
-  python3 Tools/gen_xcodeproj.py     # 重新生成工程（会自动带上 Vendor/libishkernel.a）
+  python3 Tools/gen_xcodeproj.py     # 重新生成工程（会自动带上 Vendor 下的 4 个 .a）
   open NpcLab.xcodeproj              # 或 bash Tools/build_ipa.sh
 
 注意：
-  · libishkernel.a 体积在 60-90MB 之间，是正常的（内核 + x86 模拟器 + fakefs）
+  · 4 个库合计约 110MB，属正常（内核 + x86 模拟器 + fakefs）
   · 首次真机启动要解压 139MB 的 alpine-rootfs.zip，大约 10-20 秒，之后走缓存
 EOF

@@ -26,8 +26,14 @@ TARGET = "NpcLab"
 DEPLOY = "16.0"
 SWIFT = "5.0"
 
-# 内核静态库在不在，决定整个工程是"真能跑 Linux"还是"界面占位"
-KERNEL_LIB = os.path.join(ROOT, "Vendor", "libishkernel.a")
+# 内核静态库在不在，决定整个工程是"真能跑 Linux"还是"界面占位"。
+# 这里分 4 个库链接，不做 libtool 合并：内核里有几十组同名目标文件
+# （init/main.o 与 drivers/base/firmware_loader/main.o、fs/proc/version.o
+# 与 init/version.o、一堆 util.o / sync.o…），libtool 合并会按成员名去重，
+# 把后加入的那份丢掉。run_kernel 就在 init/main.o 里，一合并就丢。
+KERNEL_LIBS = ["liblinux.a", "libfakefs.a", "libish_emu.a",
+               "liblinux_user.a", "libiSHApp.a"]
+KERNEL_LIB = os.path.join(ROOT, "Vendor", KERNEL_LIBS[0])
 HAS_KERNEL = os.path.isfile(KERNEL_LIB)
 
 # 三个扩展，跟 Minis 的 PlugIns 一一对应
@@ -96,7 +102,7 @@ def walk_app():
     内核有没有编进来，决定三件事：
       · LinuxRuntime.swift（真）还是 LinuxRuntimeStub.swift（假）进编译
       · Core/NpcLinux.c、Core/NpcUnzip.c 编不编
-      · 链接时带不带 -force_load libishkernel.a
+      · 链接时带不带 -force_load 那 4 个内核库
     """
     srcs, hdrs, res = [], [], []
     for base, dirs, files in os.walk(APP):
@@ -120,6 +126,10 @@ def walk_app():
                 srcs.append(rel)
             elif f.endswith(".c"):
                 if HAS_KERNEL:
+                    # NpcLinux.c 由 Tools/build_ish.sh 编进 Vendor/libiSHApp.a，
+                    # 工程里再编一次会 duplicate symbol（npc_linux_boot 等）。
+                    if f == "NpcLinux.c":
+                        continue
                     srcs.append(rel)
             elif f.endswith(".h"):
                 hdrs.append(rel)
@@ -172,9 +182,9 @@ def main():
     for e in EXTENSIONS:
         print("扩展 %-20s 源文件 %d" % (e["name"], len(ext_srcs[e["name"]])))
     if HAS_KERNEL:
-        print("检测到 Vendor/libishkernel.a —— 启用内置 Linux 内核")
+        print("检测到 Vendor/liblinux.a 等 4 个内核库 —— 启用内置 Linux 内核")
     else:
-        print("没有 Vendor/libishkernel.a —— 终端走占位实现（先跑 Tools/build_ish.sh）")
+        print("没有 Vendor/liblinux.a —— 终端走占位实现（先跑 Tools/build_ish.sh）")
 
     L = []
     w = L.append
@@ -561,16 +571,14 @@ def main():
         "\t\t\t\t)"
     )
     if HAS_KERNEL:
-        # -force_load 是必须的：内核里那些 initcall / 设备驱动没人显式引用，
+        # 每个库都要 -force_load：内核里那些 initcall / 设备驱动没人显式引用，
         # 普通链接会被整段裁掉，运行时直接空指针
+        ldflags = ["$(inherited)"]
+        for lib in KERNEL_LIBS:
+            ldflags += ["-force_load", "$(SRCROOT)/Vendor/" + lib]
+        ldflags += ["-lz", "-lsqlite3"]
         tgt["OTHER_LDFLAGS"] = (
-            "(\n"
-            "\t\t\t\t\t\"$(inherited)\",\n"
-            "\t\t\t\t\t\"-force_load\",\n"
-            "\t\t\t\t\t\"$(SRCROOT)/Vendor/libishkernel.a\",\n"
-            "\t\t\t\t\t\"-lz\",\n"
-            "\t\t\t\t\t\"-lsqlite3\",\n"
-            "\t\t\t\t)"
+            "(\n" + "".join('\t\t\t\t\t"%s",\n' % f for f in ldflags) + "\t\t\t\t)"
         )
 
     w("\n/* Begin XCBuildConfiguration section */")

@@ -234,8 +234,8 @@ enum DeviceName {
         var info = utsname()
         uname(&info)
         let id = withUnsafeBytes(of: &info.machine) { raw -> String in
-            let bytes = raw.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-            return String(decoding: Array(bytes), as: UTF8.self)
+            let bytes = Array(raw.prefix { $0 != 0 })
+            return String(decoding: bytes, as: UTF8.self)
         }
         return map[id] ?? id
     }

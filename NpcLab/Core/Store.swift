@@ -221,8 +221,7 @@ final class AppSettings: ObservableObject {
         loadLogs()
         if messages.isEmpty {
             messages = [ChatMessage(role: "assistant",
-                                    text: "Npc 已上线。人设、\(PackData.shared.skills.count) 条技能索引、\(PackData.shared.tools.count) 项工具链全部在设备本地。\n设置里填模型地址与 Key 就能说话；接上节点后终端 / 逆向 / 抓包才开始有实体。",
-                                    ts: Date())]
+                                    text: "Npc 已上线。人设、\(PackData.shared.skills.count) 条技能索引、\(PackData.shared.tools.count) 项工具链全部在设备本地。\n设置里填模型地址与 Key 就能说话；接上节点后终端 / 逆向 / 抓包才开始有实体。")]
         }
     }
 

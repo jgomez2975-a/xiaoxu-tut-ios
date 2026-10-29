@@ -21,7 +21,7 @@ import ActivityKit
 
 #if canImport(ActivityKit)
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 final class LiveActivityController {
 
     static let shared = LiveActivityController()
@@ -108,38 +108,38 @@ final class LiveActivityController {
 enum LiveActivity {
 
     static func reconcile() {
-        if #available(iOS 16.1, *) {
+        if #available(iOS 16.2, *) {
             LiveActivityController.shared.reconcile()
         }
     }
 
     /// 内核在解压 rootfs
     static func unpacking(_ pct: Double) {
-        guard #available(iOS 16.1, *) else { return }
+        guard #available(iOS 16.2, *) else { return }
         LiveActivityController.shared.start(state: .unpacking(pct))
     }
 
     /// 内核在启动
     static func booting(_ detail: String) {
-        guard #available(iOS 16.1, *) else { return }
+        guard #available(iOS 16.2, *) else { return }
         LiveActivityController.shared.start(state: .booting(detail))
     }
 
     /// 就绪了 —— 收掉卡片
     static func ready() {
-        guard #available(iOS 16.1, *) else { return }
+        guard #available(iOS 16.2, *) else { return }
         LiveActivityController.shared.end()
     }
 
     /// 在跑命令
     static func running(_ cmd: String, lines: Int) {
-        guard #available(iOS 16.1, *) else { return }
+        guard #available(iOS 16.2, *) else { return }
         LiveActivityController.shared.update(.running(cmd, lines: lines))
     }
 
     /// 命令跑完
     static func finished(_ cmd: String, lines: Int) {
-        guard #available(iOS 16.1, *) else { return }
+        guard #available(iOS 16.2, *) else { return }
         var s = NpcActivityAttributes.ContentState.running(cmd, lines: lines)
         s.phase = "完成"
         s.progress = 1
@@ -147,7 +147,7 @@ enum LiveActivity {
     }
 
     static func stop() {
-        if #available(iOS 16.1, *) {
+        if #available(iOS 16.2, *) {
             LiveActivityController.shared.end(nil, immediately: true)
         }
     }

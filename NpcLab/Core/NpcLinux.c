@@ -24,6 +24,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
+#include <dispatch/dispatch.h>
 
 // 由 Tools/ish-npclab.patch 加进 app/LinuxPTY.c
 extern int npc_pty_write(struct linux_tty *tty, const char *buf, size_t len);
@@ -392,11 +393,37 @@ int npc_linux_exec(const char *cmd, double timeout,
 void npc_linux_free(char *p) { free(p); }
 
 // ---------------------------------------------------------------------------
+// iSH 的 async_do_in_ios
+// ---------------------------------------------------------------------------
+// 原实现在 deps/ish/app/IOSCalls.m，但它 #include <UIKit/UIKit.h> 和 Roots.h，
+// 而我们这里只需要一行 dispatch_async，没必要为了一个函数把 UIKit 那套拖进来。
+// LinuxInterop.o 和 LinuxTTY.o 都引用它（panic 上报、tty 销毁时切主线程）。
+void async_do_in_ios(void (^block)(void)) {
+    dispatch_async(dispatch_get_main_queue(), block);
+}
+
+// ---------------------------------------------------------------------------
+// iSH 的 FsInitialize
+// ---------------------------------------------------------------------------
+// LinuxRoot.c 的 ish_rootfs() 挂完 fakefs 会调 FsInitialize()。它的原实现在
+// deps/ish/app/CurrentRoot.m，但那个文件同时 #import <Foundation/Foundation.h>
+// 和 #include "kernel/calls.h"：在 kernel=linux 真内核模式下后者是完整 Linux
+// 内核头，两套头必然撞（__attribute__ 被重定义、成片 typedef redefinition）。
+//
+// 那个函数只做一件事：读 /ish/version 判断 rootfs 版本、需要时跑迁移。我们的
+// rootfs 是整包固定打进去的，不存在跨版本迁移，空实现语义上就够了。
+void FsInitialize(void) {
+}
+
+// ---------------------------------------------------------------------------
 // 交互会话
 // ---------------------------------------------------------------------------
 
 static int spawn_session(void) {
-    const char *argv[] = {"/bin/sh", "-l", NULL};
+    // 必须 static：下面的 block 要引它，而 C 的 block 是按值捕获，
+    // 数组类型不能被捕获（cannot refer to declaration with an array type
+    // inside block）。静态存储期改成按地址引用就没这个问题。
+    static const char *argv[] = {"/bin/sh", "-l", NULL};
 
     pthread_mutex_lock(&g_lock);
     g_claim_session = 1;

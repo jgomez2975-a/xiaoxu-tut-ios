@@ -19,7 +19,9 @@ import UniformTypeIdentifiers
 
 // MARK: - 条目
 
-struct NpcItem: NSFileProviderItem {
+// NSFileProviderItem 继承 NSObjectProtocol（class-only），所以这里必须是
+// class 不能是 struct，否则报 "non-class type cannot conform to class protocol"。
+final class NpcItem: NSObject, NSFileProviderItem {
 
     var itemIdentifier: NSFileProviderItemIdentifier
     var parentItemIdentifier: NSFileProviderItemIdentifier
@@ -51,6 +53,7 @@ struct NpcItem: NSFileProviderItem {
         self.creationDate = created
         self.contentModificationDate = modified
         self.relPath = rel
+        super.init()
     }
 }
 
@@ -90,7 +93,10 @@ final class NpcFileProvider: NSObject, NSFileProviderReplicatedExtension {
     }
 
     /// 磁盘路径反推 identifier
-    private func identifier(for url: URL) -> NSFileProviderItemIdentifier {
+    /// 名字不能叫 identifier(for:)：item(for identifier:) 的形参就叫 identifier，
+    /// 会把方法名遮住，调用时变成 "cannot call value of non-function type"。
+    /// 访问级别要 fileprivate：NpcEnumerator 也要用。
+    fileprivate func itemIdentifier(for url: URL) -> NSFileProviderItemIdentifier {
         let root = rootURL.standardizedFileURL.path
         let p = url.standardizedFileURL.path
         guard p.hasPrefix(root) else { return .rootContainer }
@@ -136,7 +142,7 @@ final class NpcFileProvider: NSObject, NSFileProviderReplicatedExtension {
         let item = NpcItem(identifier: identifier,
                            parent: parentURL.standardizedFileURL.path == rootURL.standardizedFileURL.path
                                ? .rootContainer
-                               : identifier(for: parentURL),
+                               : itemIdentifier(for: parentURL),
                            name: u.lastPathComponent,
                            type: type,
                            caps: isDir.boolValue
@@ -273,7 +279,7 @@ final class NpcEnumerator: NSObject, NSFileProviderEnumerator {
         for u in list.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             let v = try? u.resourceValues(forKeys: Set(keys))
             let isDir = v?.isDirectory ?? false
-            let id = provider.identifier(for: u)
+            let id = provider.itemIdentifier(for: u)
             items.append(NpcItem(identifier: id,
                                  parent: container,
                                  name: u.lastPathComponent,

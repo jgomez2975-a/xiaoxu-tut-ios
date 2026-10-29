@@ -35,15 +35,27 @@ jobs:
           du -h NpcLab/Resources/alpine-rootfs.zip
           unzip -l NpcLab/Resources/alpine-rootfs.zip | tail -3
 
-      - name: 装 meson / ninja
-        run: brew install meson ninja || brew upgrade meson ninja
+      # llvm 不是可选项：iSH 的 VDSO 必须用 clang + lld 交叉编成 i386 ELF，
+      # Xcode 自带 clang 不认识 -fuse-ld=lld，缺 llvm 会停在 vdso/meson.build:19。
+      # 注意：Homebrew 从 llvm 19 起把 lld 拆成独立公式，要单独装。
+      - name: 装 meson / ninja / llvm / lld
+        run: |
+          for p in meson ninja llvm lld; do
+            brew list "$p" >/dev/null 2>&1 || brew install "$p"
+          done
+          echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/lld/bin"  >> "$GITHUB_PATH"
+          /opt/homebrew/opt/llvm/bin/clang --version | head -1
+          command -v ld.lld
+          # 直接跑 iSH 自带的探测脚本，它过了 VDSO 就一定编得出来
+          bash deps/ish/vdso/check-cc.sh /opt/homebrew/opt/llvm/bin/clang
 
       # 交叉编译 iSH 的 Linux 内核。第一次要 20-40 分钟，之后有缓存会快很多。
       - name: 缓存 iSH 构建
         uses: actions/cache@v4
         with:
           path: deps/ish/build-ios
-          key: ish-${{ runner.os }}-${{ hashFiles('deps/ish/meson.build') }}
+          key: ish-v3-${{ runner.os }}-${{ hashFiles('deps/ish/meson.build') }}
 
       - name: 编译 iSH 内核
         run: bash Tools/build_ish.sh

@@ -95,14 +95,12 @@ enum Workspace {
             identifier: NSFileProviderDomainIdentifier(rawValue: providerDomain),
             displayName: "小徐TuT 工作区")
 
-        NSFileProviderManager.getDomains { list in
-            if list.contains(where: { $0.identifier == domain.identifier }) {
-                return
-            }
-            NSFileProviderManager.add(domain) { err in
-                if let err = err {
-                    NSLog("[NpcLab] FileProvider 注册失败: \(err.localizedDescription)")
-                }
+        // 不查 getDomains：iOS SDK 里那个类方法只暴露了 async 版，同步签名写不出来。
+        // 这里也不需要先查——重复 add 同 identifier 的 domain，系统会回一个
+        // 「已存在」错误，对功能没有影响，日志里带一句就够。
+        NSFileProviderManager.add(domain) { err in
+            if let err = err {
+                NSLog("[NpcLab] FileProvider 注册返回（已注册过可忽略）: \(err.localizedDescription)")
             }
         }
     }

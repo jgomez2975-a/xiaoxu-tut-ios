@@ -61,12 +61,12 @@ fi
 # ---------------------------------------------------------------------------
 # 1. 内核状态判定 —— 没有 .a 也能出包，只是终端页跑不了 Linux
 # ---------------------------------------------------------------------------
-KERNEL_LIB="$ROOT/Vendor/libishkernel.a"
+KERNEL_LIB="$ROOT/Vendor/liblinux.a"
 if [ -f "$KERNEL_LIB" ]; then
     echo "    内核  : 有（$(du -h "$KERNEL_LIB" | cut -f1)）→ 真终端模式"
     KERNEL_MODE="real"
 else
-    printf "\n\033[1;33m!! 没有 Vendor/libishkernel.a，走 stub 模式\033[0m\n"
+    printf "\n\033[1;33m!! 没有 Vendor/liblinux.a，走 stub 模式\033[0m\n"
     echo "   工程能编、界面能用，但终端页会显示「未编译内核」。"
     echo "   要真终端：bash Tools/build_ish.sh（首次 20-40 分钟），或加 --with-kernel"
     KERNEL_MODE="stub"
