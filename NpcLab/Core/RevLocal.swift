@@ -119,8 +119,8 @@ final class RevLocal: ObservableObject {
                 }
                 return
             }
-            var t = LocalTarget(path: p)
             let perms = lines[0]
+            var t = LocalTarget(path: p)
             if perms.hasPrefix("d") {
                 t.kind = "目录"
                 t.size = ""
@@ -132,10 +132,11 @@ final class RevLocal: ObservableObject {
             }
             t.arch = Self.archFromKind(t.kind)
             t.label = (p as NSString).lastPathComponent
+            let result = t
 
             await MainActor.run {
                 if !self.targets.contains(where: { $0.path == p }) {
-                    self.targets.append(t)
+                    self.targets.append(result)
                 }
                 self.busy = false
                 self.status = ""
@@ -173,23 +174,30 @@ final class RevLocal: ObservableObject {
             var idx = b64.startIndex
             var sent = 0
             let total = b64.count
+            var failAt = 0
             while idx < b64.endIndex {
                 let end = b64.index(idx, offsetBy: chunk, limitedBy: b64.endIndex) ?? b64.endIndex
                 let piece = String(b64[idx..<end])
                 let cmd = "printf '%s' '\(piece)' >> \(Self.guestDir)/.up.b64"
                 let r = await rt.exec(cmd, timeout: 30)
                 if r.code != 0 {
-                    await MainActor.run {
-                        self.busy = false
-                        self.status = "传输失败，第 \(sent) 块"
-                    }
-                    _ = await rt.exec("rm -f \(Self.guestDir)/.up.b64", timeout: 10)
-                    return
+                    failAt = sent
+                    break
                 }
                 sent += 1
                 idx = end
                 let p = Double(idx.utf16Offset(in: b64)) / Double(total)
                 await MainActor.run { self.progress = p }
+            }
+            let sentFinal = sent
+
+            if failAt != 0 || sentFinal != (b64.count + chunk - 1) / chunk {
+                await MainActor.run {
+                    self.busy = false
+                    self.status = "传输失败，第 \(sentFinal) 块"
+                }
+                _ = await rt.exec("rm -f \(Self.guestDir)/.up.b64", timeout: 10)
+                return
             }
 
             let dec = await rt.exec(
@@ -244,7 +252,7 @@ final class RevLocal: ObservableObject {
             let r = await rt.exec(cmd, timeout: 600)
             let json = Self.extractJSON(r.out)
 
-            var out: [LocalFunc] = []
+            var built: [LocalFunc] = []
             if let d = json.data(using: .utf8),
                let arr = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] {
                 for f in arr {
@@ -254,10 +262,11 @@ final class RevLocal: ObservableObject {
                     if name.hasPrefix("sym.imp.") { continue }
                     let off = (f["offset"] as? Int) ?? Int((f["offset"] as? NSNumber)?.int64Value ?? 0)
                     let size = (f["size"] as? Int) ?? Int((f["size"] as? NSNumber)?.int64Value ?? 0)
-                    out.append(LocalFunc(name: name, offset: off, size: size))
+                    built.append(LocalFunc(name: name, offset: off, size: size))
                 }
             }
-            out.sort { $0.offset < $1.offset }
+            built.sort { $0.offset < $1.offset }
+            let out = built
 
             await MainActor.run {
                 self.funcs = out
@@ -301,13 +310,15 @@ final class RevLocal: ObservableObject {
                 engine = name
                 break
             }
+            let textFinal = text
+            let engineFinal = engine
             await MainActor.run {
-                self.pseudo = text.isEmpty ? "（没有输出：r2 在这个地址上没认出函数）" : text
-                self.pseudoEngine = engine
+                self.pseudo = textFinal.isEmpty ? "（没有输出：r2 在这个地址上没认出函数）" : textFinal
+                self.pseudoEngine = engineFinal
                 self.busy = false
                 self.status = ""
             }
-            self.log("pseudo \(f.name) \(engine) \(text.count)字")
+            self.log("pseudo \(f.name) \(engineFinal) \(textFinal.count)字")
         }
     }
 
