@@ -156,6 +156,11 @@ struct SettingsView: View {
             SectionTitle(text: "开发者")
             Card(padding: 0) {
                 VStack(spacing: 0) {
+                    NavigationLink { LocalFilesView() } label: {
+                        NavRow(color: T.orange, glyph: "文", title: "本机文件",
+                               sub: "浏览 / 编辑 App 沙盒里的文件，「文件」App 里同步可见")
+                    }.buttonStyle(.plain)
+                    RowDivider()
                     NavigationLink { HostPanel() } label: {
                         NavRow(color: T.purple, glyph: "盘", title: "宿主访问",
                                sub: "让 AI 读取节点上的文件（授权根之外一律拒绝）")
@@ -187,16 +192,16 @@ struct SettingsView: View {
                 VStack(spacing: 0) {
                     NavigationLink { RevPanel() } label: {
                         NavRow(color: T.purple, glyph: "◎", title: "逆向分析",
-                               sub: "目标管理 + radare2 出函数级 C 伪代码（pdg / pdd / pdc）")
+                               sub: "本机 radare2（内置）+ PC 节点两套，pdg / pdc / pdf 自动降级")
                     }.buttonStyle(.plain)
                     RowDivider()
                     NavigationLink { ProxyPanel() } label: {
                         NavRow(color: T.green, glyph: "⇄", title: "抓包与改写",
-                               sub: "HTTP/HTTPS 中间人，查看流量并改写请求 / 响应")
+                               sub: "本机 HTTP 代理（无需节点）+ 节点 MITM 两套")
                     }.buttonStyle(.plain)
                 }
             }
-            Text("目标管理、伪代码、抓包都在节点上执行；此页只做控制面。")
+            Text("这两页都有「本机 / 节点」切换：本机模式不联网、不看 PC 脸色；节点模式在局域网里有 radare2 与 MITM 时更完整。")
                 .font(.system(size: 10.5)).foregroundColor(T.txt3)
 
             SectionTitle(text: "日志")

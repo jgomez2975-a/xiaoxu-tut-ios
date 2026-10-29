@@ -73,9 +73,17 @@ int npc_rmtree(const char *path) {
 }
 
 int npc_unzip_is_done(const char *destDir) {
+    // rootfs 的 zip 里带了一层 alpine-rootfs/ 目录：
+    //     alpine-rootfs/meta.db
+    //     alpine-rootfs/data/...
+    // 直接解到 destDir 就会变成 destDir/alpine-rootfs/...，内核要挂的根在第二层。
+    // 两个位置都认一下，老版本解出来的也能直接用，不用重解 139MB。
     char probe[4096];
     snprintf(probe, sizeof(probe), "%s/meta.db", destDir);
-    return access(probe, F_OK) == 0;
+    if (access(probe, F_OK) == 0) return 1;
+    snprintf(probe, sizeof(probe), "%s/alpine-rootfs/meta.db", destDir);
+    if (access(probe, F_OK) == 0) return 1;
+    return 0;
 }
 
 /// 解一个条目的数据到 out（已 malloc）

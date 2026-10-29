@@ -146,6 +146,15 @@ else
     echo "    ✗ alpine-rootfs.zip 没进 bundle（检查 Resources 的 Copy Bundle Resources）"
 fi
 
+# 4.2b rootfs 的 ELF 架构必须跟内核的模拟目标一致。
+# 内核是 i386 模拟器，rootfs 却是 aarch64 的话：execve 全部 -ENOEXEC，
+# 内核启 init 失败 → die() → 点终端直接闪退，而包本身看起来完全正常。
+# 这个错犯过一次，所以卡在打包这一步，不许再静默过。
+if [ -f "$APP/alpine-rootfs.zip" ]; then
+    python3 Tools/build_rootfs.py --check --zip "$APP/alpine-rootfs.zip" \
+        || die "rootfs 架构与内核不匹配（见上），这个包出去也是点终端就闪退"
+fi
+
 # 4.3 真终端模式下，内核符号必须真的在可执行文件里
 EXE="$APP/$APP_NAME"
 if [ "$KERNEL_MODE" = "real" ]; then

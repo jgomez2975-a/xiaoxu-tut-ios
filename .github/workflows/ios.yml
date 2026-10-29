@@ -30,10 +30,13 @@ jobs:
 
       - name: rootfs 检查
         run: |
-          # 大文件不在 git 里，先按分段拼回 138.7MB 的 zip
+          # 大文件不在 git 里，先按分段拼回 zip
           bash Tools/join_rootfs.sh
           du -h NpcLab/Resources/alpine-rootfs.zip
           unzip -l NpcLab/Resources/alpine-rootfs.zip | tail -3
+          # 架构对不对，在这里就拦下：内核是 i386 模拟，rootfs 必须是 i386，
+          # 否则 execve 全 -ENOEXEC，装到手机上点终端直接闪退。
+          python3 Tools/build_rootfs.py --check --zip NpcLab/Resources/alpine-rootfs.zip
 
       # llvm 不是可选项：iSH 的 VDSO 必须用 clang + lld 交叉编成 i386 ELF，
       # Xcode 自带 clang 不认识 -fuse-ld=lld，缺 llvm 会停在 vdso/meson.build:19。

@@ -27,18 +27,28 @@ enum Workspace {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID)
     }
 
+    /// 实际落地用的容器。免签装（没有 App Group entitlement）时退回 App 自己的
+    /// Documents —— 配合 Info.plist 里的 UIFileSharingEnabled，这个目录在
+    /// 「文件」App 里能看到，读写不用非得有 App Group。
+    /// 以前这里直接返回 nil，于是整个工作区是死的，看着就像"读写没做"。
+    static var container: URL {
+        if let g = groupURL { return g }
+        let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
     /// 分享收件箱
     static var inbox: URL? {
-        guard let g = groupURL else { return nil }
-        let u = g.appendingPathComponent("Inbox", isDirectory: true)
+        let u = container.appendingPathComponent("Inbox", isDirectory: true)
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }
 
     /// 用户工作区（文件 App 里看到的那个位置）
     static var work: URL? {
-        guard let g = groupURL else { return nil }
-        let u = g.appendingPathComponent("Workspace", isDirectory: true)
+        let u = container.appendingPathComponent("Workspace", isDirectory: true)
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }

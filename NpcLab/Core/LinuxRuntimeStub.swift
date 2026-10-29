@@ -54,4 +54,14 @@ final class LinuxRuntime: ObservableObject {
     func resize(cols: Int, rows: Int) {}
     func clear() { lines.removeAll() }
     func rebuildRootfs() {}
+
+    /// 真实现里这两个是把一行命令送进 pty；没有内核时只留一行提示
+    var sessionAlive: Bool { false }
+    @discardableResult
+    func sendLine(_ cmd: String) -> Bool {
+        lines.append(TermLine(text: "$ \(cmd)", kind: .command))
+        lines.append(TermLine(text: "没有内核，命令执行不了。", kind: .error))
+        return false
+    }
+    func restartSession() {}
 }

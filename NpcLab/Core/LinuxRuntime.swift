@@ -28,8 +28,21 @@ final class LinuxRuntime: ObservableObject {
     /// 终端里发起的打开请求（OSC 1337），终端页监听后弹原生界面
     @Published var openRequest: OpenRequest?
 
-    /// rootfs 解压目录
+    /// rootfs 解压目录（zip 解到这个目录下）
     private(set) var rootfsDir: URL
+
+    /// 交给内核挂载的那个根。zip 里带了一层 alpine-rootfs/，所以真根在第二层：
+    ///   <rootfsDir>/alpine-rootfs/{meta.db,data}
+    /// 以前直接把 rootfsDir 传进去，meta.db 找不到 → fakefs 打不开 →
+    /// 内核 die() 把整个进程带走，表现就是「点终端闪退」。这里两个布局都认。
+    var rootfsRoot: URL {
+        let nested = rootfsDir.appendingPathComponent("alpine-rootfs", isDirectory: true)
+        if FileManager.default.fileExists(atPath: nested.appendingPathComponent("meta.db").path) {
+            return nested
+        }
+        return rootfsDir
+    }
+
     private var booted = false
     private var pending = Data()
     private var osc = OSCScanner()
@@ -65,9 +78,12 @@ final class LinuxRuntime: ObservableObject {
         try? fm.createDirectory(at: rootfsDir.deletingLastPathComponent(),
                                 withIntermediateDirectories: true)
 
+        NpcLog.write("boot: 开始 · dir=\(rootfsDir.path)")
+
         // 1. rootfs：已经解过就跳过
-        if npc_unzip_is_done(rootfsDir.path) == 0 {
+        if npc_unzip_is_done(rootfsDir.path) == 1 {
             emit(.system, "[rootfs] 已存在，跳过解压")
+            NpcLog.write("boot: rootfs 已存在")
         } else {
             guard let zip = Bundle.main.url(forResource: "alpine-rootfs", withExtension: "zip") else {
                 fail("bundle 里找不到 alpine-rootfs.zip")
@@ -75,6 +91,7 @@ final class LinuxRuntime: ObservableObject {
             }
             setStage(.unpacking(0))
             emit(.system, "[rootfs] 开始解压 \(byteText(fileSize(zip)))")
+            NpcLog.write("boot: 解压开始")
 
             let rc = npc_unzip(zip.path, rootfsDir.path,
                                npcUnzipTrampoline,
@@ -84,37 +101,45 @@ final class LinuxRuntime: ObservableObject {
                 return
             }
             emit(.system, "[rootfs] 解压完成")
+            NpcLog.write("boot: 解压完成")
         }
+
+        let sub = rootfsRoot.path
+        if !fm.fileExists(atPath: sub + "/meta.db") {
+            fail("rootfs 结构不对：\(sub) 下没有 meta.db")
+            return
+        }
+        NpcLog.write("boot: 内核根 = \(sub)")
 
         // 2. 起内核
         setStage(.booting)
         emit(.system, "[kernel] 正在启动 iSH/Linux…")
 
-        let sub = rootfsDir.path
         let rc = npc_linux_boot(sub)
         guard rc == 0 else {
             fail("内核启动失败（code \(rc)）：\(String(cString: npc_linux_last_error()))")
             return
         }
 
-        // 内核是异步起的：npc_linux_boot 成功只代表线程已投递，不代表挂载完成。
-        // 真就绪要跑得动 /bin/true，也就是 fakefs 挂载 + chroot 都成功。
+        // 内核是异步起的：npc_linux_boot 会等到 initcall 跑完（最多 15 秒），
+        // 再用 /bin/true 实测。真就绪 = fakefs 挂上 + chroot 成功 + 能执行。
         emit(.system, "[kernel] 等待挂载 rootfs…")
         var ready = false
-        for i in 0..<60 {
+        for i in 0..<45 {
             if npc_linux_ready() == 1 { ready = true; break }
-            if i % 8 == 7 {
+            if i % 5 == 4 {
                 emit(.system, "[kernel] 仍在等待… \(i + 1)s")
             }
             Thread.sleep(forTimeInterval: 1.0)
         }
         guard ready else {
-            fail("内核 60 秒内未就绪：\(String(cString: npc_linux_last_error()))")
+            fail("内核 45 秒内未就绪：\(String(cString: npc_linux_last_error()))")
             return
         }
         booted = true
         setStage(.ready)
         emit(.system, "[kernel] 就绪 · \(String(cString: npc_linux_version()))")
+        NpcLog.write("boot: 内核就绪")
         WidgetBridge.setKernel(1, stage: "运行中")
 
         // 3. 铺 default_mount（npclab-open / profile.d / pip.conf …）
@@ -123,10 +148,12 @@ final class LinuxRuntime: ObservableObject {
         // 4. 拉一个登录 shell 出来
         let s = npc_linux_session_open()
         if s == 0 {
-            emit(.system, "[sh] /bin/sh -l 已挂到 pty")
+            emit(.system, "[sh] /bin/sh 已挂到 pty，可以直接敲命令")
+            NpcLog.write("boot: 会话已建立")
             DispatchQueue.main.async { npc_linux_session_resize(96, 30) }
         } else {
             emit(.error, "[sh] 会话启动失败（code \(s)）")
+            NpcLog.write("boot: 会话启动失败 code=\(s)")
         }
     }
 
@@ -221,6 +248,32 @@ final class LinuxRuntime: ObservableObject {
         bytes.withCString { p in
             _ = npc_linux_session_write(p, Int32(bytes.utf8.count))
         }
+    }
+
+    /// 会话还活着吗。pty 那头 sh 退出后就是 false。
+    var sessionAlive: Bool { booted && npc_linux_session_alive() == 1 }
+
+    /// 往真 shell 里送一整行。会话没了就先拉一个新的。
+    /// 终端页的输入框走这条路径，输出由 pty 回调直接上屏，提示符也是真的。
+    @discardableResult
+    func sendLine(_ cmd: String) -> Bool {
+        guard booted else { return false }
+        if npc_linux_session_alive() == 0 {
+            if npc_linux_session_open() != 0 {
+                emit(.error, "[sh] 会话已结束，且重建失败")
+                return false
+            }
+            DispatchQueue.main.async { npc_linux_session_resize(96, 30) }
+        }
+        send(cmd + "\n")
+        return true
+    }
+
+    /// 重开一个干净会话（清屏后调用，避免上一个 sh 的残留状态）
+    func restartSession() {
+        guard booted else { return }
+        _ = npc_linux_session_open()
+        resize(cols: 96, rows: 30)
     }
 
     func resize(cols: Int, rows: Int) {

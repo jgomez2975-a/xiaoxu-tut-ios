@@ -10,7 +10,7 @@ struct RevFunc: Identifiable, Hashable {
 
 // MARK: - 逆向分析
 
-struct RevPanel: View {
+struct NodeRevView: View {
     @EnvironmentObject var st: AppSettings
     @EnvironmentObject var hub: NodeHub
 
@@ -289,7 +289,7 @@ struct RevPanel: View {
 
 // MARK: - 抓包与改写
 
-struct ProxyPanel: View {
+struct NodeProxyPanel: View {
     @EnvironmentObject var st: AppSettings
     @EnvironmentObject var hub: NodeHub
 

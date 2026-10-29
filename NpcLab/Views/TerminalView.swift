@@ -42,7 +42,9 @@ struct TerminalView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    Button { rt.clear() } label: { Label("清屏", systemImage: "trash") }
+                    Button { rt.clear(); rt.restartSession() } label: {
+                        Label("清屏并重开会话", systemImage: "trash")
+                    }
                     Button { showHelp = true } label: { Label("说明", systemImage: "questionmark.circle") }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -140,7 +142,8 @@ struct TerminalView: View {
             HStack(spacing: 7) {
                 ForEach(quick, id: \.1) { item in
                     Button {
-                        rt.runInTerminal(item.1)
+                        // 走真 pty：和手敲一样，提示符、报错、退出码都是 shell 自己的
+                        rt.sendLine(item.1)
                     } label: {
                         Text(item.0)
                             .font(.system(size: 11.5))
@@ -197,7 +200,8 @@ struct TerminalView: View {
         let c = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !c.isEmpty, rt.stage.isReady else { return }
         input = ""
-        rt.runInTerminal(c)
+        // 提示符由 shell 自己回显，这里不再伪造 "root@npclab:~#" 那一行
+        rt.sendLine(c)
     }
 
     // MARK: 说明
@@ -225,7 +229,15 @@ struct TerminalView: View {
                     Text("""
                     · vi / top / less 这类全屏程序会花屏（这里没有完整 VT100 光标定位）
                     · 不能访问系统目录、不能提权、不能碰别的 App
-                    · 联网要走 App 的沙箱权限，不是真网卡
+                    · 联网能力受限（内核没有真网卡），localhost 之外基本不通
+                    """)
+                    .font(.system(size: 13)).foregroundColor(T.txt2)
+
+                    Text("可以敲什么").font(.system(size: 15, weight: .semibold)).foregroundColor(T.txt)
+                    Text("""
+                    · 自带 radare2 5.9.8 + r2ghidra：r2 -A /usr/bin/python3.12 就能反汇编
+                    · 自带 binutils、python3.12、sqlite3、wget、nc
+                    · 每次进终端都会挂一个真的 /bin/sh 到 pty，提示符、管道、重定向都正常
                     """)
                     .font(.system(size: 13)).foregroundColor(T.txt2)
 

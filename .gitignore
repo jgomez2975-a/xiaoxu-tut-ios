@@ -9,8 +9,10 @@ deps/ish/deps/linux/
 *.o
 *.a
 
-# rootfs：138.7MB，超过 GitHub 单文件 100MB 上限，改成 Tools/rootfs_parts/ 里的分段提交
+# rootfs：超过 GitHub 单文件 100MB 上限（而且本工程走 Git Data API 推送，
+# 单 blob 约 45MB 就会 422），改成 Tools/rootfs_parts/ 里的分段提交
 # 本地由 Tools/join_rootfs.sh 拼回来，build_ipa.sh 会自动调
+# 注意架构：内核是 i386 模拟器，rootfs 必须是 i386（见 Tools/build_rootfs.py）
 NpcLab/Resources/alpine-rootfs.zip
 NpcLab/Resources/alpine-rootfs.zip.joining
 
@@ -33,3 +35,6 @@ Thumbs.db
 # Python 字节码
 __pycache__/
 *.pyc
+
+# rootfs 构建过程的下载缓存（alpine minirootfs / apk / APKINDEX）
+Tools/.cache/

@@ -269,6 +269,9 @@ APPSRC=(
     "$ISH/app/LinuxRoot.c"
     "$ISH/app/LinuxTTY.c"
     "$ISH/app/LinuxPTY.c"
+    # 内核 initcall 完成的信号灯：晚于 call_block_init/ios_pty_init，
+    # 让 App 侧知道什么时候才能往内核里投 block（早一秒就是 SIGILL）
+    "$ISH/app/NpcBoot.c"
 )
 
 for src in "${APPSRC[@]}"; do

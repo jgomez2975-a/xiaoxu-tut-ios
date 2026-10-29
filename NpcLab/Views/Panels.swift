@@ -30,10 +30,17 @@ struct PermPanel: View {
                 item("对话", st.apiKey.isEmpty ? "缺 Key" : "可用",
                      st.apiKey.isEmpty ? T.orange : T.green,
                      st.apiKey.isEmpty ? "设置 → 模型 → API Key" : "\(st.provider) · \(st.model)")
-                item("终端 / 逆向 / 抓包",
-                     hub.state.online ? "经节点" : "不可用",
-                     hub.state.online ? T.green : T.txt3,
-                     hub.state.online ? st.bridgeURL : "iOS 沙箱内没有裸 shell，必须接节点")
+                item("终端 / Linux", LinuxRuntime.shared.stage.isReady ? "运行中" : "未启动",
+                     LinuxRuntime.shared.stage.isReady ? T.green : T.orange,
+                     "内置 iSH 内核 + Alpine，真 shell，不需要节点")
+                item("逆向分析", RevLocal.shared.r2Ready ? "radare2 就绪" : "待启动 Linux",
+                     RevLocal.shared.r2Ready ? T.green : T.txt3,
+                     "本机跑 r2 + r2ghidra；节点模式下更完整")
+                item("抓包", LocalProxy.shared.running
+                     ? "本机代理 :\(LocalProxy.shared.port)" : "可启动",
+                     LocalProxy.shared.running ? T.green : T.txt3,
+                     "本机 HTTP 代理（明文可改）；HTTPS 只看隧道，MITM 需装 CA")
+                item("本机文件读写", "可用", T.green, "Documents / Workspace，「文件」App 同步可见")
                 item("读写其他 App 容器", "不可用", T.txt3, "iOS 沙箱硬约束，越狱环境另说")
             }
 

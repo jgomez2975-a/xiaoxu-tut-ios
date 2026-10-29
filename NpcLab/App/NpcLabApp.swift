@@ -126,7 +126,8 @@ struct Welcome: View {
     private let steps: [(String, String, String)] = [
         ("1", "填模型", "设置 → 模型：接口地址、API Key、模型名。OpenAI 兼容与 Anthropic 两套协议都吃。"),
         ("2", "看注入", "对话页左上角那个数字是当前 SYSTEM 的体积，点开能看到五层原文。"),
-        ("3", "接节点", "设置 → 算力节点：填 PC 上 npclab 的 IP:8790。终端、逆向、抓包全在那边跑。")
+        ("3", "用终端", "终端页第一次进来会解 rootfs（139MB，约十几秒），之后秒开。里面是真的 Alpine：sh、python3、radare2 都有。"),
+        ("4", "接节点（可选）", "设置 → 算力节点：填 PC 上 npclab 的 IP:8790。逆向和抓包的本机模式不接也能用。")
     ]
 
     var body: some View {
@@ -161,9 +162,9 @@ struct Welcome: View {
                     }
 
                     Card {
-                        Text("为什么执行能力要接节点").font(.system(size: 12.5, weight: .semibold))
+                        Text("执行能力从哪来").font(.system(size: 12.5, weight: .semibold))
                             .foregroundColor(T.orange)
-                        Text("iOS 沙箱不允许 App fork 进程、也不允许执行 App 外的可执行文件。Minis 之所以能在手机上跑 shell，是把 iSH 内核和 Alpine rootfs 一起编译进了 App。本工程不带内核，所以终端 / radare2 / MITM 走局域网节点，其余全部本地。")
+                        Text("终端是一个真的 Linux：iSH 内核 + Alpine rootfs 都编译进了 App，sh、python3、radare2 5.9.8 直接在里面跑。逆向分析调的就是它；抓包是本机 HTTP 代理。节点只是可选增强，不开也能用。")
                             .font(.system(size: 11.5)).foregroundColor(T.txt2)
                             .fixedSize(horizontal: false, vertical: true)
                     }

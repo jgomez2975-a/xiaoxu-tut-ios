@@ -41,7 +41,7 @@ API = "https://api.github.com"
 
 BIG = 8 * 1024 * 1024
 WORKERS = 6
-RETRY = 4
+RETRY = 8
 WORKFLOW_DIR = ".github/workflows/"
 
 _lock = threading.Lock()
@@ -66,6 +66,14 @@ class Api:
         self.repo = repo
         self.token = token
         self.blobs_put = 0
+        # 本机代理（http://127.0.0.1:58602）转发大请求时会弄坏 SSL 记录
+        # （SSLV3_ALERT_BAD_RECORD_MAC），而 api.github.com 本来就是被放行、
+        # 可以直连的。这里强制绕过代理，直连 api.github.com。
+        # 想恢复走代理就设 NPCLAB_USE_PROXY=1。
+        if os.environ.get("NPCLAB_USE_PROXY") == "1":
+            self._opener = urllib.request.build_opener()
+        else:
+            self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def raw(self, method, path, payload=None, timeout=300):
         url = API + "/repos/" + self.repo + path
@@ -77,10 +85,14 @@ class Api:
             "User-Agent": "npclab-build",
         })
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with self._opener.open(req, timeout=timeout) as r:
                 return r.status, json.load(r), None
         except urllib.error.HTTPError as e:
             return e.code, None, e.read().decode("utf-8", "replace")
+        except Exception as e:
+            # 连接超时 / 重置 / 断网 / SSL 错误都不是 HTTP 错误，但一样值得重试，
+            # 否则传大 blob 时网络抖一下就整段崩溃、进程静默退出。
+            return 0, None, "网络错误：%s" % e
 
     def call(self, method, path, payload=None, timeout=300, tries=RETRY, ok=(200, 201)):
         last = ""
@@ -88,6 +100,15 @@ class Api:
             st, body, err = self.raw(method, path, payload, timeout)
             if st in ok:
                 return body
+            # 网络错误（st==0，SSL/超时/重置）是随机的，撞上就多等会儿再试，
+            # 别用 4xx 那种"马上重试也没用"的短间隔。
+            if st == 0:
+                last = "网络错误（%s）" % (err or "")[:160]
+                if i < tries - 1:
+                    wait = 3 * (i + 1)
+                    log("    ! %s  %s，%ds 后重试 (%d/%d)" % (path, last[:120], wait, i + 1, tries - 1))
+                    time.sleep(wait)
+                continue
             # 4xx 里只有限流/冲突值得重试
             if st < 500 and st not in (403, 409, 422, 429):
                 raise RuntimeError("HTTP %d %s %s\n%s" % (st, method, path, (err or "")[:800]))
