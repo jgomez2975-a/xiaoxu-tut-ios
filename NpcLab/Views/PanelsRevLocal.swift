@@ -9,17 +9,19 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 入口：本机 / 节点 两种模式共用一个页面
+/// 入口：本机 / 节点 两种模式共用一个页面。
+/// 对齐 AzTuT：默认走 PC 节点（节点端 rev.py 跑 radare2 6.2.4 + r2ghidra，
+/// 伪代码是 ghidra 级的）；本机 radare2 只是节点连不上时的降级。
 struct RevPanel: View {
     @EnvironmentObject var st: AppSettings
     @EnvironmentObject var hub: NodeHub
-    @State private var local = true
+    @State private var local = false
 
     var body: some View {
         VStack(spacing: 0) {
             Picker("", selection: $local) {
-                Text("本机 radare2").tag(true)
                 Text("PC 节点").tag(false)
+                Text("本机 radare2").tag(true)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 14)
@@ -34,12 +36,9 @@ struct RevPanel: View {
         }
         .background(Backdrop())
         .onAppear {
-            // 没配节点就直接落在本机模式，别一进来就是「节点未就绪」
-            if !st.bridgeOn || !hub.state.online {
-                local = true
-            } else {
-                local = false
-            }
+            // 默认走节点（对齐 AzTuT）；只有节点明确离线时才落到本机降级，
+            // 而不是反过来「默认本机、连上才切节点」。
+            local = !(st.bridgeOn && hub.state.online)
         }
     }
 }
@@ -183,6 +182,27 @@ struct LocalRevView: View {
                 }
             }
 
+            // 深度分析辅助工具（对齐 AzTuT 的 binutils_query / file_query / capstone）
+            if let cur = eng.current {
+                SectionTitle(text: "辅助工具 · \(cur.label.isEmpty ? cur.path : cur.label)")
+                Card {
+                    HStack(spacing: 6) {
+                        toolBtn("file", "文件识别") { eng.fileQuery(cur) }
+                        toolBtn("llvm-otool", "头部/段") { eng.binutilsQuery(cur, tool: "headers") }
+                        toolBtn("依赖", "依赖库") { eng.binutilsQuery(cur, tool: "deps") }
+                        toolBtn("objc", "类列表") { eng.binutilsQuery(cur, tool: "objc") }
+                    }
+                    HStack(spacing: 6) {
+                        toolBtn("符号", "符号表") { eng.binutilsQuery(cur, tool: "symbols") }
+                        toolBtn("strings", "字符串") { eng.binutilsQuery(cur, tool: "strings") }
+                        toolBtn("capstone", "反汇编") { eng.capstoneDisasm(cur) }
+                    }
+                    Text("capstone 指令级反汇编需 rootfs 带 py3-capstone；llvm-otool 需 llvm。")
+                        .font(.system(size: 10)).foregroundColor(T.txt3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             if !eng.pseudo.isEmpty {
                 SectionTitle(text: eng.pseudoEngine.isEmpty
                              ? "伪代码" : "伪代码 · \(eng.pseudoEngine)")
@@ -218,6 +238,21 @@ struct LocalRevView: View {
             }
         }
         .onAppear { eng.probe() }
+    }
+
+    private func toolBtn(_ glyph: String, _ label: String, _ action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: glyph).font(.system(size: 12)).foregroundColor(T.accent)
+                Text(label).font(.system(size: 9)).foregroundColor(T.txt2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(T.cardHi).clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
     }
 
     private var statusCard: some View {

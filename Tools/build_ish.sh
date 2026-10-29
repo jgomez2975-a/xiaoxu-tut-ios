@@ -52,8 +52,9 @@ fi
 echo "    meson : $(meson --version)"
 echo "    ninja : $(ninja --version)"
 
-# VDSO 要编成 i386 ELF 共享库塞进模拟进程地址空间，只能用 clang + lld 交叉编。
-# Xcode 自带的 clang 不认 -fuse-ld=lld，缺 llvm 会停在 deps/ish/vdso/meson.build:19。
+# VDSO 要编成 aarch64 ELF 共享库塞进模拟进程地址空间，只能用 clang + lld 交叉编。
+# ARM64 guest（对齐 OpenMinis/ish-arm64）：VDSO 用 -target aarch64-linux-gnu。
+# Xcode 自带的 clang 不认 -fuse-ld=lld，缺 llvm 会停在 deps/ish/vdso/arm64/meson.build。
 LLVM_PREFIX=""
 for p in /opt/homebrew/opt/llvm /usr/local/opt/llvm /opt/local; do
     if [ -x "$p/bin/clang" ]; then
@@ -78,11 +79,11 @@ export PATH="$LLVM_PREFIX/bin:$LLD_DIR:$PATH"
 echo "    llvm  : $LLVM_PREFIX  ($("$LLVM_PREFIX/bin/clang" --version | head -1))"
 echo "    lld   : $LLD_DIR/ld.lld"
 
-# 前置跑一遍 iSH 自带的探测，它过了 VDSO 就一定编得出来
-if ! bash "$ISH/vdso/check-cc.sh" "$LLVM_PREFIX/bin/clang" >/dev/null 2>&1; then
-    die "VDSO 编译器自检失败：$LLVM_PREFIX/bin/clang 无法 -target i386-linux -fuse-ld=lld"
+# 前置跑一遍 iSH ARM64 分支自带的探测，它过了 VDSO 就一定编得出来
+if ! bash "$ISH/vdso/arm64/check-cc-arm64.sh" "$LLVM_PREFIX/bin/clang" >/dev/null 2>&1; then
+    die "VDSO 编译器自检失败：$LLVM_PREFIX/bin/clang 无法 -target aarch64-linux-gnu -fuse-ld=lld"
 fi
-echo "    vdso  : 自检通过"
+echo "    vdso  : 自检通过（aarch64）"
 
 [ -d "$ISH" ] || die "找不到 iSH 源码：$ISH"
 
@@ -190,11 +191,11 @@ fi
 if [ -f "$BUILD/build.ninja" ]; then
     meson setup --reconfigure "$BUILD" "$ISH" \
         --cross-file "$CROSS" \
-        -Dkernel=linux -Dengine=asbestos -Dlog_handler=dprintf
+        -Dkernel=linux -Dengine=asbestos -Dlog_handler=dprintf -Dguest_arch=arm64
 else
     meson setup "$BUILD" "$ISH" \
         --cross-file "$CROSS" \
-        -Dkernel=linux -Dengine=asbestos -Dlog_handler=dprintf
+        -Dkernel=linux -Dengine=asbestos -Dlog_handler=dprintf -Dguest_arch=arm64
 fi
 
 say "开始编内核（第一次很慢，去喝杯咖啡）"

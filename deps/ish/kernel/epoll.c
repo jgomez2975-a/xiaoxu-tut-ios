@@ -1,3 +1,4 @@
+#include <sys/stat.h>
 #include "kernel/calls.h"
 #include "fs/poll.h"
 
@@ -17,14 +18,21 @@ fd_t sys_epoll_create(int_t flags) {
     fd->epollfd.poll = poll;
     return f_install(fd, flags);
 }
-fd_t sys_epoll_create0(void) {
+fd_t sys_epoll_create0() {
     return sys_epoll_create(0);
 }
 
 struct epoll_event_ {
     uint32_t events;
+#ifdef GUEST_ARM64
+    uint32_t __pad;
+#endif
     uint64_t data;
-} __attribute__((packed));
+}
+#ifndef GUEST_ARM64
+__attribute__((packed))
+#endif
+;
 
 #define EPOLL_CTL_ADD_ 1
 #define EPOLL_CTL_DEL_ 2
@@ -32,19 +40,42 @@ struct epoll_event_ {
 #define EPOLLET_ (1 << 31)
 #define EPOLLONESHOT_ (1 << 30)
 
+static int epoll_ctl_held(struct fd *epoll, int_t op, struct fd *fd, fd_t f, addr_t event_addr);
+
 int_t sys_epoll_ctl(fd_t epoll_f, int_t op, fd_t f, addr_t event_addr) {
     STRACE("epoll_ctl(%d, %d, %d, %#x)", epoll_f, op, f, event_addr);
-    struct fd *epoll = f_get(epoll_f);
+    // [T-ish-poll-member-race] Both fds are held for the whole call: a
+    // concurrent close() of either number used to free the epoll set (or the
+    // member) while this call was adding to it.
+    struct fd *epoll = f_get_retained(epoll_f);
     if (epoll == NULL)
         return _EBADF;
-    if (epoll->ops != &epoll_ops)
+    if (epoll->ops != &epoll_ops) {
+        fd_close(epoll);
         return _EINVAL;
-    struct fd *fd = f_get(f);
-    if (fd == NULL)
+    }
+    struct fd *fd = f_get_retained(f);
+    if (fd == NULL) {
+        fd_close(epoll);
         return _EBADF;
+    }
+    int err = epoll_ctl_held(epoll, op, fd, f, event_addr);
+    fd_close(fd);
+    fd_close(epoll);
+    return err;
+}
+
+static int epoll_ctl_held(struct fd *epoll, int_t op, struct fd *fd, fd_t f, addr_t event_addr) {
+    // Regular files (and directories) are not pollable: they are always
+    // "ready", so Linux rejects adding them to an epoll set with EPERM. iSH
+    // used to accept them, which makes bun's fs.WriteStream take its polling
+    // path (instead of the EPERM fallback) and then throw EEXIST on the second
+    // registration of the same fd. Match Linux and reject with EPERM.
+    if (op == EPOLL_CTL_ADD_ && (S_ISREG(fd->type) || S_ISDIR(fd->type)))
+        return _EPERM;
 
     if (op == EPOLL_CTL_DEL_)
-        return poll_del_fd(epoll->epollfd.poll, fd);
+        return poll_del_fd(epoll->epollfd.poll, fd, f);
 
     struct epoll_event_ event;
     if (user_get(event_addr, event))
@@ -52,11 +83,11 @@ int_t sys_epoll_ctl(fd_t epoll_f, int_t op, fd_t f, addr_t event_addr) {
     STRACE(" {events: %#x, data: %#x}", event.events, event.data);
 
     if (op == EPOLL_CTL_ADD_) {
-        if (poll_has_fd(epoll->epollfd.poll, fd))
+        if (poll_has_fd(epoll->epollfd.poll, fd, f))
             return _EEXIST;
-        return poll_add_fd(epoll->epollfd.poll, fd, event.events, (union poll_fd_info) event.data);
+        return poll_add_fd(epoll->epollfd.poll, fd, f, event.events, (union poll_fd_info) event.data);
     } else {
-        return poll_mod_fd(epoll->epollfd.poll, fd, event.events, (union poll_fd_info) event.data);
+        return poll_mod_fd(epoll->epollfd.poll, fd, f, event.events, (union poll_fd_info) event.data);
     }
 }
 
@@ -74,14 +105,24 @@ static int epoll_callback(void *context, int types, union poll_fd_info info) {
     return 1;
 }
 
+static int epoll_wait_held(struct fd *epoll, addr_t events_addr, int_t max_events, int_t timeout);
+
 int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t timeout) {
     STRACE("epoll_wait(%d, %#x, %d, %d)", epoll_f, events_addr, max_events, timeout);
-    struct fd *epoll = f_get(epoll_f);
+    // [T-ish-poll-member-race] Held across the wait: poll_wait() drops
+    // poll->lock while it sleeps, and a close(epfd) from another thread then
+    // freed the set under the sleeper, which woke up writing into it.
+    struct fd *epoll = f_get_retained(epoll_f);
     if (epoll == NULL)
         return _EBADF;
-    if (epoll->ops != &epoll_ops)
-        return _EINVAL;
+    int res = epoll->ops == &epoll_ops
+        ? epoll_wait_held(epoll, events_addr, max_events, timeout)
+        : _EINVAL;
+    fd_close(epoll);
+    return res;
+}
 
+static int epoll_wait_held(struct fd *epoll, addr_t events_addr, int_t max_events, int_t timeout) {
     struct timespec timeout_ts;
     if (timeout >= 0) {
         timeout_ts.tv_sec = timeout / 1000;
@@ -93,6 +134,18 @@ int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t t
 
     struct epoll_context context = {.events = events, .n = 0, .max_events = max_events};
     STRACE("...\n");
+    { extern char *getenv(const char *);
+      static addr_t wa = 1;
+      if (wa == 1) { const char *e = getenv("ISH_EPOLL_WATCH_MUTEX"); wa = e ? strtoull(e,NULL,16) : 0; }
+      if (wa) {
+          dword_t mv = 0; dword_t *vp = mem_ptr(current->mem, wa, MEM_READ); if (vp) mv = *vp;
+          if (mv != 0) {  // only log when the watched mutex is held
+              fprintf(stderr, "[epoll] pid=%d enters epoll_wait timeout=%d while mutex 0x%llx = 0x%x; members:\n",
+                      current->pid, timeout, (unsigned long long)wa, mv);
+              extern void poll_dump_members(struct poll *p);
+              poll_dump_members(epoll->epollfd.poll);
+          }
+      } }
     int res = poll_wait(epoll->epollfd.poll, epoll_callback, &context, timeout < 0 ? NULL : &timeout_ts);
     STRACE("%d end epoll_wait", current->pid);
     if (res >= 0) {
@@ -101,6 +154,13 @@ int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t t
         }
         if (user_write(events_addr, events, sizeof(struct epoll_event_) * res))
             return _EFAULT;
+    } else if (res != _EINTR) {
+        // Host-level errors from kqueue/kevent should not propagate to the guest
+        // as unexpected errnos. libuv asserts that epoll_pwait only fails with
+        // EINTR; anything else (EBADF from kqueue race, etc.) crashes the guest.
+        // Convert to EINTR so the guest's event loop retries gracefully.
+        printk("epoll_wait: converting error %d to EINTR (pid=%d)\n", res, current->pid);
+        res = _EINTR;
     }
     return res;
 }
@@ -108,10 +168,9 @@ int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t t
 int_t sys_epoll_pwait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t timeout, addr_t sigmask_addr, dword_t sigsetsize) {
     sigset_t_ mask;
     if (sigmask_addr != 0) {
-        if (sigsetsize != sizeof(sigset_t_))
-            return _EINVAL;
-        if (user_get(sigmask_addr, mask))
-            return _EFAULT;
+        int err = user_get_sigset(sigmask_addr, sigsetsize, &mask);
+        if (err)
+            return err;
         sigmask_set_temp(mask);
     }
 

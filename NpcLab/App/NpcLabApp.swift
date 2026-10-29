@@ -35,6 +35,10 @@ struct NpcLabApp: App {
                     WidgetBridge.setKernel(LinuxRuntime.shared.stage.isReady ? 1 : 0,
                                            stage: LinuxRuntime.shared.stage.label)
                     WidgetBridge.setNode(hub.state.online)
+
+                    // 本机真 MITM 抓包拦截器（对齐 AzTuT 的 URLProtocol 拦截）。
+                    // 授权打开时注册，App 内所有走 URLSession 的请求都能被抓到解密。
+                    MITMInterceptor.shared.setEnabled(settings.allowProxy)
                 }
         }
     }

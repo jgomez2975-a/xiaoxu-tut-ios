@@ -112,6 +112,30 @@ static struct linux_tty_callbacks ios_pty_callbacks = {
     .hangup = ios_pty_cb_hangup,
 };
 
+// ---------------------------------------------------------------------------
+// NpcLab: 从 App 侧往 pty 主端写（键盘输入方向）
+//
+// iSH 上游只提供 send_input（pty → App，即 shell 的输出），没有反方向的入口。
+// 而终端要能敲键盘就必须有：linux_tty 是 ios_pty 的成员，container_of 反推回去，
+// 再对 ptm 做 kernel_write 就是标准 pty 语义。
+//
+// 这个函数由 NpcLab/Core/NpcLinux.c 声明并调用，靠 Tools/build_ish.sh 保证存在。
+// ---------------------------------------------------------------------------
+int npc_pty_write(struct linux_tty *ltty, const char *buf, size_t len) {
+    struct ios_pty *pty;
+    ssize_t n;
+
+    if (!ltty || !buf || len == 0)
+        return -EINVAL;
+
+    pty = container_of(ltty, struct ios_pty, linux_tty);
+    if (!pty->ptm)
+        return -EIO;
+
+    n = kernel_write(pty->ptm, buf, len, NULL);
+    return (int) n;
+}
+
 static void ios_pty_poll_cb_work(struct work_struct *work) {
     struct ios_pty *pty = container_of(work, struct ios_pty, poll_cb_work);
     __poll_t events = vfs_poll(pty->ptm, NULL);
@@ -196,27 +220,3 @@ static __init int ios_pty_init(void) {
 }
 
 device_initcall(ios_pty_init);
-
-// ---------------------------------------------------------------------------
-// NpcLab: 从 App 侧往 pty 主端写（键盘输入方向）
-//
-// iSH 上游只提供 send_input（pty → App，即 shell 的输出），没有反方向的入口。
-// 而终端要能敲键盘就必须有：linux_tty 是 ios_pty 的成员，container_of 反推回去，
-// 再对 ptm 做 kernel_write 就是标准 pty 语义。
-//
-// 这个函数由 NpcLab/Core/NpcLinux.c 声明并调用，靠 Tools/build_ish.sh 保证存在。
-// ---------------------------------------------------------------------------
-int npc_pty_write(struct linux_tty *ltty, const char *buf, size_t len) {
-    struct ios_pty *pty;
-    ssize_t n;
-
-    if (!ltty || !buf || len == 0)
-        return -EINVAL;
-
-    pty = container_of(ltty, struct ios_pty, linux_tty);
-    if (!pty->ptm)
-        return -EIO;
-
-    n = kernel_write(pty->ptm, buf, len, NULL);
-    return (int) n;
-}

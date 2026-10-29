@@ -16,6 +16,9 @@ static void proc_pid_getname(struct proc_entry *entry, char *buf) {
 static struct task *proc_get_task(struct proc_entry *entry) {
     lock(&pids_lock);
     struct task *task = pid_get_task(entry->pid);
+    // Also reject tasks that are mid-exit: sighand/group may already be freed.
+    if (task != NULL && (task->exiting || task->sighand == NULL || task->group == NULL))
+        task = NULL;
     if (task == NULL)
         unlock(&pids_lock);
     return task;
@@ -109,13 +112,45 @@ static int proc_pid_statm_show(struct proc_entry *entry, struct proc_data *buf) 
     if (task == NULL)
         return _ESRCH;
 
-    proc_printf(buf, "%lu ", 0); // total vm size
-    proc_printf(buf, "%lu ", 0); // vm resident size
-    proc_printf(buf, "%lu ", 0); // resident shared
-    proc_printf(buf, "%lu ", 0); // text
-    proc_printf(buf, "%lu ", 0); // lib (always 0 since linux 2.6)
-    proc_printf(buf, "%lu ", 0); // data + stack
-    proc_printf(buf, "%lu ", 0); // dirty (always 0 since linux 2.6)
+    // Count mapped pages by walking the page table. Reporting all-zeros here
+    // breaks runtimes (e.g. Bun/JSC) that derive pool/lock sizes from the
+    // reported VM size and reject a value of 0 ("Invalid value for lock: 0").
+    unsigned long total = 0;   // total program size (VmSize, in pages)
+    unsigned long resident = 0; // resident set size (VmRSS, in pages)
+    unsigned long shared = 0;   // resident shared pages
+    // [T-ish-exit-mm-general-lock] general_lock is what keeps task->mem alive
+    // while we walk it (do_exit unpublishes the mm under it); cmdline/environ
+    // already did this, statm/maps/mem did not.
+    lock(&task->general_lock);
+    struct mem *mem = task->mem;
+    if (mem != NULL) {
+        read_wrlock(&mem->lock);
+        page_t page = 0;
+        while (page < MEM_PAGES) {
+            struct pt_entry *pt = mem_pt(mem, page);
+            if (pt != NULL) {
+                total++;
+                // A page backed by real data (not a pure PROT_NONE
+                // reservation / lazy anon) counts as resident.
+                if (pt->data != NULL) {
+                    resident++;
+                    if (pt->flags & P_SHARED)
+                        shared++;
+                }
+            }
+            mem_next_page(mem, &page);
+        }
+        read_wrunlock(&mem->lock);
+    }
+    unlock(&task->general_lock);
+
+    proc_printf(buf, "%lu ", total);    // total program size
+    proc_printf(buf, "%lu ", resident); // resident set size
+    proc_printf(buf, "%lu ", shared);   // resident shared pages
+    proc_printf(buf, "%lu ", 0);        // text
+    proc_printf(buf, "%lu ", 0);        // lib (always 0 since linux 2.6)
+    proc_printf(buf, "%lu ", resident); // data + stack
+    proc_printf(buf, "%lu ", 0);        // dirty (always 0 since linux 2.6)
     proc_printf(buf, "\n");
 
     proc_put_task(task);
@@ -172,16 +207,6 @@ out_free_task:
     return err;
 }
 
-static int proc_pid_mem_show(struct proc_entry *entry, struct proc_data *buf) {
-    // mem_show does not need to do any data set-up. The /proc/mem read/write 
-    // operations do not rely on this set-up as they call user_read/write 
-    // operations directly.
-
-    (void)entry;
-    (void)buf;
-    return 0;
-}
-
 void proc_maps_dump(struct task *task, struct proc_data *buf) {
     struct mem *mem = task->mem;
     if (mem == NULL)
@@ -223,8 +248,14 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
         } else if (data->fd != NULL) {
             generic_getpath(start_pt->data->fd, path);
         }
+#ifdef GUEST_ARM64
+        proc_printf(buf, "%012llx-%012llx %c%c%c%c %08lx 00:00 %-10d %s\n",
+                (unsigned long long)(start << PAGE_BITS),
+                (unsigned long long)(end << PAGE_BITS),
+#else
         proc_printf(buf, "%08x-%08x %c%c%c%c %08lx 00:00 %-10d %s\n",
                 start << PAGE_BITS, end << PAGE_BITS,
+#endif
                 start_pt->flags & P_READ ? 'r' : '-',
                 start_pt->flags & P_WRITE ? 'w' : '-',
                 start_pt->flags & P_EXEC ? 'x' : '-',
@@ -240,7 +271,9 @@ static int proc_pid_maps_show(struct proc_entry *entry, struct proc_data *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
     proc_maps_dump(task, buf);
+    unlock(&task->general_lock);
     proc_put_task(task);
     return 0;
 }
@@ -249,7 +282,9 @@ static ssize_t proc_pid_mem_pread(struct proc_entry *entry, struct proc_data *bu
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
     int result = user_read_task(task, (addr_t)offset, buf->data, buf->size);
+    unlock(&task->general_lock);
     proc_put_task(task);
     return result ? -1 : buf->size;
 }
@@ -258,7 +293,9 @@ static ssize_t proc_pid_mem_pwrite(struct proc_entry *entry, struct proc_data *b
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
     int result = user_write_task_ptrace(task, (addr_t)offset, buf->data, buf->size);
+    unlock(&task->general_lock);
     proc_put_task(task);
     return result ? -1 : buf->size;
 }
@@ -268,15 +305,28 @@ static struct proc_dir_entry proc_pid_fd;
 
 static bool proc_pid_fd_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
     struct task *task = proc_get_task(entry);
+    // Task exited while its /proc/<pid>/fd dir was being iterated (e.g.
+    // `find /proc` racing short-lived children). This function returns bool —
+    // the old `return _ESRCH` here (-3) read as TRUE, so proc_readdir consumed
+    // a next_entry that was never filled in (meta == NULL) and crashed in
+    // proc_entry_getname (EXC_BAD_ACCESS at 0x10). No task = no more entries.
     if (task == NULL)
-        return _ESRCH;
-    lock(&task->files->lock);
-    while (*index < task->files->size && task->files->files[*index] == NULL)
+        return false;
+    // Retain the fdtable, then drop pids_lock BEFORE taking files->lock, to
+    // avoid the pids_lock -> files->lock ordering (proc_get_task holds
+    // pids_lock). Other paths take files->lock and then pids_lock (e.g. via
+    // proc_entry_stat); holding both here in the opposite order deadlocked
+    // claude-cli startup when 20+ bun workers scan /proc/self/fd at once.
+    struct fdtable *files = task->files;
+    files->refcount++;
+    proc_put_task(task); // releases pids_lock
+    lock(&files->lock);
+    while (*index < files->size && files->files[*index] == NULL)
         (*index)++;
     fd_t f = (*index)++;
-    bool any_left = (unsigned) f < task->files->size;
-    unlock(&task->files->lock);
-    proc_put_task(task);
+    bool any_left = (unsigned) f < files->size;
+    unlock(&files->lock);
+    fdtable_release(files);
     *next_entry = (struct proc_entry) {&proc_pid_fd, .pid = entry->pid, .fd = f};
     return any_left;
 }
@@ -289,11 +339,24 @@ static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    // Retain the fd under files->lock, then drop BOTH files->lock and
+    // pids_lock (held by proc_get_task) before calling generic_getpath.
+    // getpath can take other subsystem locks (mounts, real fs), and holding
+    // pids_lock across it created a lock-ordering hazard against paths that
+    // take those locks first and then pids_lock — an intermittent deadlock
+    // during claude-cli startup when 20+ bun worker threads all scan
+    // /proc/self/fd concurrently. Also: fd may be NULL if another thread
+    // closed the descriptor (return ENOENT, not a host crash).
     lock(&task->files->lock);
     struct fd *fd = fdtable_get(task->files, entry->fd);
-    int err = generic_getpath(fd, buf);
+    if (fd != NULL)
+        fd = fd_retain(fd);
     unlock(&task->files->lock);
-    proc_put_task(task);
+    proc_put_task(task); // releases pids_lock
+    if (fd == NULL)
+        return _ENOENT;
+    int err = generic_getpath(fd, buf);
+    fd_close(fd);
     return err;
 }
 
@@ -302,7 +365,11 @@ static int proc_pid_exe_readlink(struct proc_entry *entry, char *buf) {
     if (task == NULL)
         return _ESRCH;
     lock(&task->general_lock);
-    int err = generic_getpath(task->mm->exefile, buf);
+    int err;
+    if (task->mm == NULL || task->mm->exefile == NULL)
+        err = _ENOENT;
+    else
+        err = generic_getpath(task->mm->exefile, buf);
     unlock(&task->general_lock);
     proc_put_task(task);
     return err;
@@ -344,7 +411,7 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
     {"fd", S_IFDIR, .readdir = proc_pid_fd_readdir},
     {"maps", .show = proc_pid_maps_show},
-    {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite, .show = proc_pid_mem_show},
+    {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite},
     {"stat", .show = proc_pid_stat_show},
     {"statm", .show = proc_pid_statm_show},
     {"task", S_IFDIR, .readdir = proc_pid_task_readdir},

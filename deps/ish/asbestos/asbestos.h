@@ -6,8 +6,8 @@
 #include "util/sync.h"
 
 #define FIBER_INITIAL_HASH_SIZE (1 << 10)
-#define FIBER_CACHE_SIZE (1 << 10)
-#define FIBER_PAGE_HASH_SIZE (1 << 10)
+#define FIBER_CACHE_SIZE (1 << 12)  // 4096 entries
+#define FIBER_PAGE_HASH_SIZE (1 << 14)  // ~4-5 blocks per bucket on big programs; invalidation walks a bucket
 
 struct asbestos {
     // there is one asbestos per address space
@@ -27,8 +27,29 @@ struct asbestos {
         struct list blocks[2];
     } *page_hash;
 
+    // Incremented on every block invalidation; used to invalidate persistent
+    // per-thread block caches (which may hold pointers to jetsam'd blocks)
+    unsigned invalidate_gen;
+
+    // Number of threads currently inside cpu_run_to_interrupt.
+    // When 1, we can skip jetsam_lock (no other thread to synchronize with).
+    unsigned active_threads;
+
+    // === RCU-like Optimization ===
+    // Atomic counter: number of threads currently executing JIT code.
+    // Jetsam cleanup waits until this reaches 0 before freeing blocks.
+    // This avoids read lock overhead on every JIT enter/exit.
+    _Atomic unsigned jit_active_threads;
+
+    // Generation number for jetsam cleanup. Incremented when jetsam list
+    // becomes non-empty. Threads check this to know when cleanup is needed.
+    _Atomic unsigned jetsam_gen;
+
     lock_t lock;
     wrlock_t jetsam_lock;
+#ifdef ISH_JIT
+    void *jit_ctxs;             // guest-arm64/jit.c: per-module contexts of this address space
+#endif
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources
@@ -57,8 +78,23 @@ struct fiber_block {
     struct list jetsam;
     bool is_jetsam;
 
+#ifdef ISH_JIT
+    // Native code (guest-arm64/jit.c). native_link[i]: the patchable
+    // instruction in the native exit for jump_ip[i] (nop, or a direct branch
+    // into the chained successor); native_link_orig[i]: what a link replaced.
+    uint32_t *native_link[2];
+    uint32_t native_link_orig[2];
+    uint32_t *native_loop;      // self-loop block: head of the promoted loop body
+    uintptr_t native_entry;     // hot entry of the native code at code[0], 0 if none
+    void *jit_ctx;              // PIC: module context the native code runs with (x29)
+    unsigned jit_idx;           // PIC: its translation's slot in that context
+#endif
+
     unsigned long code[];
 };
+
+// High-bit tracing: detect emulation bugs that leave bits 32+ dirty in guest regs
+extern volatile bool g_trace_highbits;
 
 // Create a new asbestos
 struct asbestos *asbestos_new(struct mmu *mmu);

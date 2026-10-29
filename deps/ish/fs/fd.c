@@ -19,6 +19,7 @@ struct fd *fd_create(const struct fd_ops *ops) {
     fd->mount = NULL;
     fd->offset = 0;
     list_init(&fd->poll_fds);
+    list_init(&fd->pidfd_links);
     lock_init(&fd->poll_lock);
     lock_init(&fd->lock);
     cond_init(&fd->cond);
@@ -155,6 +156,18 @@ struct fd *f_get(fd_t f) {
     return fd;
 }
 
+// [T-ish-poll-member-race] f_get() plus a reference taken while files->lock
+// is still held, so a concurrent close() of the number cannot free the fd
+// while the caller uses it. Release with fd_close().
+struct fd *f_get_retained(fd_t f) {
+    lock(&current->files->lock);
+    struct fd *fd = fdtable_get(current->files, f);
+    if (fd != NULL)
+        fd_retain(fd);
+    unlock(&current->files->lock);
+    return fd;
+}
+
 static fd_t f_install_start(struct fd *fd, fd_t start) {
     assert(start >= 0);
     struct fdtable *table = current->files;
@@ -285,7 +298,7 @@ int fd_setflags(struct fd *fd, int flags) {
     return 0;
 }
 
-dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
+dword_t sys_fcntl(fd_t f, dword_t cmd, addr_t arg) {
     struct fdtable *table = current->files;
     struct fd *fd = f_get(f);
     if (fd == NULL)
@@ -381,7 +394,7 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
     }
 }
 
-dword_t sys_fcntl32(fd_t fd, dword_t cmd, dword_t arg) {
+dword_t sys_fcntl32(fd_t fd, dword_t cmd, addr_t arg) {
     switch (cmd) {
         case F_GETLK64_:
         case F_SETLK64_:
@@ -389,4 +402,33 @@ dword_t sys_fcntl32(fd_t fd, dword_t cmd, dword_t arg) {
             return _EINVAL;
     }
     return sys_fcntl(fd, cmd, arg);
+}
+
+// close_range(unsigned first, unsigned last, unsigned flags) — Linux 5.9+ syscall #436.
+// Closes all open fds in [first, last]. Used by Anthropic claude-cli, openssh,
+// systemd, etc.; without this, claude-cli loops on missing-syscall ENOSYS.
+// CLOSE_RANGE_UNSHARE (0x02) and CLOSE_RANGE_CLOEXEC (0x04) are defined in
+// kernel headers but we treat them as no-ops here — guests that need the
+// CLOEXEC variant will fall back to F_SETFD anyway.
+#define CLOSE_RANGE_CLOEXEC_ 0x04
+dword_t sys_close_range(uint32_t first, uint32_t last, uint32_t flags) {
+    STRACE("close_range(%u, %u, 0x%x)", first, last, flags);
+    if (first > last)
+        return _EINVAL;
+    lock(&current->files->lock);
+    fd_t lim = current->files->size;
+    if ((fd_t)last >= lim) last = lim - 1;
+    int err = 0;
+    for (fd_t f = (fd_t)first; f <= (fd_t)last; f++) {
+        if (current->files->files[f] == NULL) continue;
+        if (flags & CLOSE_RANGE_CLOEXEC_) {
+            // Mark CLOEXEC instead of actually closing.
+            bit_set(f, current->files->cloexec);
+            continue;
+        }
+        int e = fdtable_close(current->files, f);
+        if (e != 0 && err == 0) err = e;
+    }
+    unlock(&current->files->lock);
+    return 0;  // Linux always returns 0 on success even if some close failed
 }

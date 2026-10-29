@@ -10,13 +10,13 @@ import SwiftUI
 struct ProxyPanel: View {
     @EnvironmentObject var st: AppSettings
     @EnvironmentObject var hub: NodeHub
-    @State private var local = true
+    @State private var local = false
 
     var body: some View {
         VStack(spacing: 0) {
             Picker("", selection: $local) {
-                Text("本机代理").tag(true)
                 Text("PC 节点").tag(false)
+                Text("本机代理").tag(true)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 14)
@@ -31,6 +31,8 @@ struct ProxyPanel: View {
         }
         .background(Backdrop())
         .onAppear {
+            // 默认走节点（对齐 AzTuT：节点端 proxy.py 是真 MITM，能解密 HTTPS）；
+            // 只有节点明确离线时才落到本机 HTTP 明文代理降级。
             local = !(st.bridgeOn && hub.state.online)
         }
     }
@@ -40,6 +42,7 @@ struct LocalProxyPanel: View {
 
     @EnvironmentObject var st: AppSettings
     @ObservedObject private var px = LocalProxy.shared
+    @ObservedObject private var mitm = MITMInterceptor.shared
 
     @State private var port = "8888"
     @State private var showEditor = false
@@ -119,8 +122,7 @@ struct LocalProxyPanel: View {
                 }
                 Text("""
                 · HTTP 明文：完整抓取，能改头、改正文
-                · HTTPS：只做盲隧道，能看到域名和字节数，看不到明文。\
-                要看明文得给手机装一张自签 CA（MITM），这一步还没做
+                · HTTPS：真 MITM 解密（内置自签 CA + URLProtocol 拦截），明文可见、可改写
                 · 别的设备想抓：把服务器填成这台手机的局域网 IP
                 """)
                 .font(.system(size: 10.5)).foregroundColor(T.txt3)
@@ -203,6 +205,43 @@ struct LocalProxyPanel: View {
                     }
                 }
             }
+
+            // MITM 明文流（对齐 AzTuT 的 CapturedFlow —— 真 HTTPS 解密后的明文）
+            if !mitm.flows.isEmpty {
+                SectionTitle(text: "MITM 明文流 \(mitm.flows.count)")
+                Card {
+                    ForEach(mitm.flows.reversed()) { f in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(f.method)
+                                    .font(T.mono(9.5, .bold)).foregroundColor(T.accent)
+                                Text("\(f.status)")
+                                    .font(T.mono(9.5))
+                                    .foregroundColor(f.status >= 400 || f.status == 0 ? T.red : T.green)
+                                if f.https {
+                                    Pill(text: "https", color: T.teal)
+                                }
+                                if f.modified {
+                                    Pill(text: "已改写", color: T.orange)
+                                }
+                                Spacer()
+                                Text(hhmmss(f.ts)).font(T.mono(9)).foregroundColor(T.txt3)
+                            }
+                            Text(f.url).font(T.mono(9.5)).foregroundColor(T.txt2)
+                                .lineLimit(2).truncationMode(.middle)
+                            if !f.reqBody.isEmpty {
+                                Text("→ \(String(f.reqBody.prefix(120)))")
+                                    .font(T.mono(9)).foregroundColor(T.txt3).lineLimit(2)
+                            }
+                            if !f.respBody.isEmpty {
+                                Text("← \(String(f.respBody.prefix(120)))")
+                                    .font(T.mono(9)).foregroundColor(T.txt3).lineLimit(2)
+                            }
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showEditor) {
             RuleEditor(rule: draft) { r in
@@ -211,10 +250,12 @@ struct LocalProxyPanel: View {
         }
         .onAppear {
             px.rules = st.proxyRules
+            mitm.rules = st.proxyRules
             if px.running { port = "\(px.port)" }
         }
         .onChange(of: st.proxyRules) { v in
             px.rules = v
+            mitm.rules = v
         }
     }
 

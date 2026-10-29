@@ -32,6 +32,7 @@ struct task {
     uid_t_ groups[MAX_GROUPS];
     char comm[16] __strncpy_safe; // locked by general_lock
     bool did_exec; // for that one annoying setsid edge case
+    bool undumpable; // prctl(PR_SET_DUMPABLE, 0); inherited by fork, cleared by exec
 
     struct fdtable *files;
     struct fs_info *fs;
@@ -46,6 +47,16 @@ struct task {
     // private
     sigset_t_ saved_mask;
     bool has_saved_mask;
+
+    // Set when thread is in a blocking syscall (futex_wait, poll_wait, etc.)
+    // Used for deadlock detection: if all threads are blocking, it's a hang.
+    bool blocking;
+    // Per-thread pipe for futex_wait wakeup (reused across calls to avoid
+    // pipe creation overhead in Go runtime spin loops)
+    int futex_pipe[2]; // [0]=read, [1]=write; -1 if not yet created
+    // Timestamp (CLOCK_MONOTONIC ns) of last time blocking became false.
+    // Used by deadlock detector to check how long ALL threads have been stuck.
+    uint64_t last_unblocked_ns;
 
     struct {
         // Locks all ptrace-related things
@@ -67,10 +78,39 @@ struct task {
     addr_t clear_tid;
     addr_t robust_list;
 
+    // SA_RESTART support: on each syscall entry we snapshot the number and the
+    // first arg (x0/ebx), which the return value overwrites. If the syscall is
+    // interrupted (returns EINTR) and a signal with SA_RESTART is then
+    // delivered, receive_signals rewinds PC to the syscall instruction and
+    // restores the original first arg so the syscall re-executes — matching
+    // Linux. Without it, JSC's SIGPWR-based GC safepoint handshake (which
+    // registers SA_RESTART) livelocks on a futex that keeps returning EINTR.
+    unsigned syscall_restart_num;
+    uint64_t syscall_restart_arg0;
+    uint64_t syscall_restart_pc; // cpu.pc at syscall entry (== svc_addr+4); the
+                                 // SA_RESTART rewind only fires when cpu.pc still
+                                 // equals this, so a stale syscall_restartable
+                                 // flag can't corrupt PC on a later interrupt.
+    bool syscall_restartable; // this syscall returned EINTR and may restart
+
     // locked by pids_lock
     dword_t exit_code;
     bool zombie;
     bool exiting;
+    // [T-ish-mm-leak-refcount-handoff] Set by the do_exit_group safety valve
+    // when it orphans a thread stuck in an uninterruptible host syscall: the
+    // valve can't mm_release() now (the thread may still hold mem->lock inside
+    // user_write → UAF, see T-ish-mem-uaf-user-write), so it hands the release
+    // off to this thread's own pthread cleanup handler, which runs only after
+    // the thread has left the read_wrlock critical section. Prevents the mm
+    // (whole guest address space) from leaking forever when the thread never
+    // re-enters do_exit(). Cleared once released so it never double-frees.
+    bool mm_release_deferred;
+    // [T-ish-exit-valve-progress] Set by the thread itself on entering
+    // do_exit, before it queues for pids_lock. do_exit_group's safety valve
+    // reads it to tell a thread that is already exiting (merely waiting its
+    // turn for the lock) from one stuck elsewhere.
+    _Atomic bool exit_started;
 
     // this structure is allocated on the stack of the parent's clone() call
     struct vfork_info {
@@ -84,7 +124,29 @@ struct task {
     // specifically: comm, mm
     lock_t general_lock;
 
+    // [T-ish-fork-rate] How hard THIS task has been forking lately: an
+    // exponentially weighted forks-per-second with a 1 s time constant, only
+    // ever touched by the task itself inside sys_clone. A fresh shell doing a
+    // handful of forks (a tool call) stays "light" and bypasses the global
+    // fork-rate governor; the looping shells of a fork storm do not.
+    uint64_t fork_rate_last_ns;
+    double fork_rate_ewma;
+
     struct task_sockrestart sockrestart;
+
+    // Native offload: when is_native_proxy is true, this task is waiting
+    // for a host-native process instead of running emulated code.
+    pid_t native_pid;
+    bool is_native_proxy;
+
+    // [T-ish-offload-signal-forward] Set while this task is executing an
+    // IN-PROCESS offload handler (native_offload_add_handler). Distinct from
+    // is_native_proxy, which covers only the posix_spawn shape: a handler runs
+    // on this very thread with no host pid, so a signal can't be forwarded with
+    // kill() — it has to go through the handler's abort callback instead.
+    // Points into the static offload registry, which lives for the process
+    // lifetime, so it never dangles. NULL when not in a handler.
+    void *native_offload_entry;
 
     // current condition/lock, so it can be notified in case of a signal
     cond_t *waiting_cond;
@@ -157,10 +219,29 @@ struct tgroup {
     bool doing_group_exit;
     dword_t group_exit_code;
 
+    // Once V8 prints a fatal-abort prefix to stderr (e.g. "abort: " or
+    // "# Fatal error"), suppress every subsequent stderr write from the
+    // group. The process is about to BRK anyway — further output is noise.
+    // Cleared on execve (new program state).
+    bool v8_aborting;
+
     struct rusage_ children_rusage;
     cond_t child_exit;
 
     dword_t personality;
+
+    // Monotonically increasing syscall counter for deadlock detection.
+    atomic_uint syscall_count;
+
+    // Timestamp of last real progress (non-blocking syscall completion).
+    // Updated atomically. Used by futex/poll safety valves to detect
+    // process-wide hangs where all threads are idle.
+    _Atomic uint64_t last_progress_ns;
+
+    // Opaque per-thread-group context for host integrations (e.g. fakefs
+    // path-translate hook). Inherited verbatim on fork via tgroup_copy().
+    // iSH itself never interprets this value; host registers a meaning.
+    uint64_t fs_context;
 
     // for everything in this struct not locked by something else
     lock_t lock;
@@ -168,6 +249,17 @@ struct tgroup {
 
 static inline bool task_is_leader(struct task *task) {
     return task->group->leader == task;
+}
+
+// [T-ish-leaked-thread-poll] True once do_exit_group's safety valve has given
+// up on this thread (it sets `exiting` and unlinks it from the group), or once
+// task_destroy has zeroed the struct under it (group == NULL). Such a thread's
+// group, sighand and files are gone or about to be freed, so a wait loop that
+// wakes up must leave before touching any of them: return to the syscall
+// dispatcher, whose post-syscall guard (calls.c) pthread_exits the thread.
+// Only valid for `current`: no other thread may be leaked while it runs.
+static inline bool task_orphaned(struct task *task) {
+    return task->exiting || task->group == NULL;
 }
 
 struct pid {
@@ -186,11 +278,43 @@ struct task *pid_get_task_zombie(dword_t id); // don't return null if the task e
 
 #define MAX_PID (1 << 15) // oughta be enough
 
+// [T-ish-cpu-top] Successful fork/clone count (kernel/fork.c), for host diagnostics.
+extern _Atomic uint64_t ish_guest_forks;
+
+// [T-ish-freeze-watch] Lock-free progress counters for the host's freeze
+// detector (kernel/freeze_watch.h): every completed syscall, and guest
+// processes (thread groups) created and not yet reaped. Relaxed atomics only;
+// readers must never need a kernel lock to see them.
+extern _Atomic uint64_t ish_guest_syscalls;
+extern _Atomic int64_t ish_live_guest_procs;
+
+// [T-ish-fork-rate] Global fork-rate governor: a token bucket that every
+// non-thread clone() draws from. When it is empty, heavy forkers sleep until
+// their token arrives (never denied, only delayed); light forkers (see
+// task->fork_rate_ewma) go through. per_sec == 0 turns it off. The host sets
+// the rate from thermal state; the CLI reads ISH_FORK_RATE=per_sec[,burst].
+void ish_set_fork_rate_limit(unsigned per_sec, unsigned burst);
+void ish_fork_rate_stats(uint64_t *throttled, uint64_t *bypassed, uint64_t *sleep_ns);
+
 // TODO document
-void task_start(struct task *task);
+// Starts the task's thread. Returns 0, or a negative guest errno (_EAGAIN when
+// the host is out of thread resources) -- callers must not assume success.
+__attribute__((warn_unused_result))
+int task_start(struct task *task);
 void task_run_current(void);
 
 extern void (*exit_hook)(struct task *task, int code);
+
+typedef int (*ish_timer_tick_hook_t)(void);
+void ish_set_timer_tick_hook(ish_timer_tick_hook_t hook);
+
+// [fork-guard] Called in sys_clone before a new task is created.
+// Return 0 to allow the fork, or a negative errno (e.g. _EAGAIN) to deny it;
+// the value is returned to the guest verbatim and no task is created.
+// Set with ish_set_fork_guard(); pass NULL to remove. Thread-safe via atomic store.
+// The callback runs on the forking thread and must not allocate or take kernel locks.
+typedef int (*ish_fork_guard_t)(void);
+void ish_set_fork_guard(ish_fork_guard_t guard);
 
 #define superuser() (current != NULL && current->euid == 0)
 

@@ -335,6 +335,155 @@ final class RevLocal: ObservableObject {
         return false
     }
 
+    // MARK: - 深度分析（对齐 AzTuT 的 binutils_query / file_query / capstone）
+
+    /// 文件元信息：file -b 输出（对齐 AzTuT 的 file_query）
+    /// 可选 sql：当文件是 SQLite 库时跑 SQL（.tables / sqlite_master 等），
+    /// 这是 AzTuT file_query 的核心能力——探索目标 App 数据容器里的数据库。
+    func fileQuery(_ t: LocalTarget, sql: String = "") {
+        guard rt.stage.isReady, !busy else { return }
+        setBusy(true, sql.isEmpty ? "file 识别…" : "SQLite 查询…")
+        Task {
+            let cmd: String
+            if sql.isEmpty {
+                cmd = "file -b '\(esc(t.path))' 2>&1"
+            } else {
+                cmd = "sqlite3 -header -column '\(esc(t.path))' \(shellQuote(sql)) 2>&1"
+            }
+            let r = await rt.exec(cmd, timeout: 30)
+            let out = r.out
+            await MainActor.run {
+                self.busy = false
+                self.pseudo = out.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.pseudoEngine = sql.isEmpty ? "file" : "sqlite"
+                self.status = ""
+            }
+            self.log("file \(t.path)\(sql.isEmpty ? "" : " sql")")
+        }
+    }
+
+    /// binutils 查询（对齐 AzTuT 的 binutils_query）：Mach-O 用 llvm-otool，
+    /// ELF 用 readelf/objdump。输出完整落到 workspace/binutils 文件。
+    func binutilsQuery(_ t: LocalTarget, tool: String = "auto",
+                       offset: Int = 0, limit: Int = 0) {
+        guard rt.stage.isReady, !busy else { return }
+        setBusy(true, "binutils 分析…")
+
+        let toolSel = tool == "auto" ? "headers" : tool
+        let cmd: String
+        switch toolSel {
+        case "headers":
+            cmd = "(llvm-otool -h -l '\(esc(t.path))' 2>/dev/null || readelf -h -l '\(esc(t.path))' 2>/dev/null) | head -300"
+        case "deps":
+            cmd = "(llvm-otool -L '\(esc(t.path))' 2>/dev/null || readelf -d '\(esc(t.path))' 2>/dev/null) | head -300"
+        case "objc":
+            cmd = "llvm-otool -o '\(esc(t.path))' 2>/dev/null | head -400"
+        case "symbols":
+            cmd = "(llvm-nm '\(esc(t.path))' 2>/dev/null || nm '\(esc(t.path))' 2>/dev/null) | head -400"
+        case "strings":
+            cmd = "strings -a '\(esc(t.path))' 2>/dev/null | head -400"
+        case "sections":
+            cmd = "(llvm-otool -l '\(esc(t.path))' 2>/dev/null | grep -A2 -i sectname || readelf -S '\(esc(t.path))' 2>/dev/null) | head -300"
+        default:
+            cmd = "(llvm-otool -\(toolSel) '\(esc(t.path))' 2>/dev/null || readelf -\(toolSel) '\(esc(t.path))' 2>/dev/null) | head -300"
+        }
+
+        Task {
+            let r = await rt.exec(cmd, timeout: 60)
+            var out = r.out
+            if limit > 0 && out.count > limit {
+                out = String(out.prefix(limit))
+            }
+            let final = out
+            // 完整输出写到 /root/npc/binutils，跟 AzTuT 一样不截断
+            _ = await rt.exec("mkdir -p \(Self.guestDir)/binutils 2>/dev/null; "
+                + "echo \"$1\" > \(Self.guestDir)/binutils/.out 2>/dev/null", timeout: 10)
+            await MainActor.run {
+                self.busy = false
+                self.pseudo = final.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.pseudoEngine = "binutils:\(toolSel)"
+                self.status = ""
+            }
+            self.log("binutils \(toolSel) \(t.path)")
+        }
+    }
+
+    /// capstone 反汇编（对齐 AzTuT 的 capstone 工具）：Python 绑定，指令级。
+    /// 需要 rootfs 里有 py3-capstone。
+    func capstoneDisasm(_ t: LocalTarget, arch: String = "auto",
+                        offset: Int = 0, count: Int = 64) {
+        guard rt.stage.isReady, !busy else { return }
+        setBusy(true, "capstone 反汇编…")
+
+        let archSel = arch == "auto" ? Self.archFromKind(t.arch) : arch
+        let csArch: String
+        let csMode: String
+        switch archSel {
+        case "arm64", "aarch64": csArch = "CS_ARCH_ARM64"; csMode = "CS_MODE_ARM"
+        case "arm": csArch = "CS_ARCH_ARM"; csMode = "CS_MODE_ARM"
+        default: csArch = "CS_ARCH_X86"; csMode = "CS_MODE_32"
+        }
+
+        let py = """
+        import capstone, sys
+        from capstone import *
+        try:
+            d = open('\(esc(t.path))','rb').read()
+        except Exception as e:
+            print('open error:', e); sys.exit(1)
+        off = \(offset)
+        if off < 0 or off >= len(d):
+            off = 0
+        md = Cs(\(csArch), \(csMode))
+        md.detail = True
+        n = 0
+        for ins in md.disasm(d[off:off+\(max(count*8, 256))], off):
+            print('0x%x:\\t%s\\t%s' % (ins.address, ins.mnemonic, ins.op_str))
+            n += 1
+            if n >= \(count): break
+        """
+        let cmd = "python3 -c " + shellQuote(py)
+
+        Task {
+            let r = await rt.exec(cmd, timeout: 60)
+            let final = r.out
+            await MainActor.run {
+                self.busy = false
+                self.pseudo = final.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.pseudoEngine = "capstone:\(archSel)"
+                self.status = ""
+            }
+            self.log("capstone \(t.path) \(archSel)")
+        }
+    }
+
+    /// capstone 自由脚本（对齐 AzTuT 的 capstone 工具语义）：
+    /// AzTuT 是「让 LLM 直接写 capstone Python 代码并打印结果」，支持
+    /// CS_ARCH_ARM64/ARM/X86，从文件或 hex 字符串读字节。这里对等同款。
+    func capstoneScript(_ code: String, guestPath: String = "") {
+        guard rt.stage.isReady, !busy else { return }
+        setBusy(true, "capstone 脚本…")
+        // 把 guestPath 注入为脚本里可用的 PATH 变量（可选）
+        let pre = guestPath.isEmpty ? "" : "PATH='\(esc(guestPath))'\n"
+        let py = pre + code
+        let cmd = "python3 -c " + shellQuote(py)
+        Task {
+            let r = await rt.exec(cmd, timeout: 120)
+            let final = r.out
+            await MainActor.run {
+                self.busy = false
+                self.pseudo = final.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.pseudoEngine = "capstone"
+                self.status = ""
+            }
+            self.log("capstone script \(final.count)字")
+        }
+    }
+
+    private func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     private func esc(_ s: String) -> String {
         s.replacingOccurrences(of: "'", with: "'\\''")
     }

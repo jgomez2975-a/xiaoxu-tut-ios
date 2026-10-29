@@ -192,16 +192,21 @@ struct SettingsView: View {
                 VStack(spacing: 0) {
                     NavigationLink { RevPanel() } label: {
                         NavRow(color: T.purple, glyph: "◎", title: "逆向分析",
-                               sub: "本机 radare2（内置）+ PC 节点两套，pdg / pdc / pdf 自动降级")
+                               sub: "本机 radare2 + binutils + capstone + PC 节点，pdg / pdc / pdf 自动降级")
                     }.buttonStyle(.plain)
                     RowDivider()
                     NavigationLink { ProxyPanel() } label: {
                         NavRow(color: T.green, glyph: "⇄", title: "抓包与改写",
-                               sub: "本机 HTTP 代理（无需节点）+ 节点 MITM 两套")
+                               sub: "本机真 MITM（URLProtocol 解密 + 改写）+ 节点 MITM 两套")
+                    }.buttonStyle(.plain)
+                    RowDivider()
+                    NavigationLink { InjectPanel() } label: {
+                        NavRow(color: T.teal, glyph: "⚡", title: "动态注入",
+                               sub: "目标 App 注入 + Frida hook 六类 + 注入日志")
                     }.buttonStyle(.plain)
                 }
             }
-            Text("这两页都有「本机 / 节点」切换：本机模式不联网、不看 PC 脸色；节点模式在局域网里有 radare2 与 MITM 时更完整。")
+            Text("逆向/抓包/注入都对齐 AzTuT：逆向用本机 r2+binutils+capstone，抓包用内置 URLProtocol 真 MITM 解密，注入用 frida hook 目标 App。")
                 .font(.system(size: 10.5)).foregroundColor(T.txt3)
 
             SectionTitle(text: "日志")

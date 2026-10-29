@@ -6,12 +6,31 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <setjmp.h>
+#include <errno.h>
+#include <time.h>
+#include <stdio.h>
 #include "misc.h"
 #include "debug.h"
 
 // locks, implemented using pthread
 
 #define LOCK_DEBUG 0
+
+// Slow-lock tracing: when enabled AND the ISH_LOCK_TRACE environment variable
+// is set, lock() spins with trylock and reports any wait longer than 3s. Useful
+// for diagnosing lock-order inversions and hangs.
+//
+// Compiled out by default. As a plain runtime `if` it could not be optimised
+// away (the flag is a mutable global), so every lock() carried the branch and
+// the inlined tracing body — a needless icache cost across the very many lock
+// sites in the emulator. It also dragged current_pid() and the trace flag into
+// anything that merely takes a lock, which broke linking for standalone tools
+// such as tools/fakefsify that have no kernel task state to report.
+//
+// Enable for a debugging build with -DLOCK_SLOW_TRACE=1.
+#ifndef LOCK_SLOW_TRACE
+#define LOCK_SLOW_TRACE 0
+#endif
 
 typedef struct {
     pthread_mutex_t m;
@@ -40,9 +59,34 @@ static inline void lock_init(lock_t *lock) {
 #else
 #define LOCK_INITIALIZER {PTHREAD_MUTEX_INITIALIZER, 0}
 #endif
+#if LOCK_SLOW_TRACE
+extern int g_lock_slow_trace; // set from ISH_LOCK_TRACE at startup
+#endif
 static inline void __lock(lock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
+#if LOCK_SLOW_TRACE
+    if (g_lock_slow_trace) {
+        struct timespec _s; clock_gettime(CLOCK_MONOTONIC, &_s);
+        int spun = 0;
+        while (pthread_mutex_trylock(&lock->m) != 0) {
+            struct timespec _b = {0, 200000}; nanosleep(&_b, NULL);
+            struct timespec _n; clock_gettime(CLOCK_MONOTONIC, &_n);
+            long ms = (_n.tv_sec-_s.tv_sec)*1000 + (_n.tv_nsec-_s.tv_nsec)/1000000;
+            if (ms > 3000 && !spun) {
+                spun = 1;
+                extern int current_pid(void);
+                fprintf(stderr, "[lockslow] pid=%d waiting >3s at %s:%d for lock=%p\n",
+                        current_pid(), file, line, (void*)lock);
+            }
+        }
+        lock->owner = pthread_self();
+        goto done;
+    }
+#endif
     pthread_mutex_lock(&lock->m);
     lock->owner = pthread_self();
+#if LOCK_SLOW_TRACE
+done:;
+#endif
 #if LOCK_DEBUG
     assert(lock->debug.initialized);
     assert(!lock->debug.file && "Attempting to recursively lock");
@@ -143,7 +187,43 @@ static inline void read_wrunlock(wrlock_t *lock) {
     if (pthread_rwlock_unlock(&lock->l) != 0) __builtin_trap();
 }
 static inline void __write_wrlock(wrlock_t *lock, const char *file, int line) {
-    if (pthread_rwlock_wrlock(&lock->l) != 0) __builtin_trap();
+    // Acquire the write lock without letting a *waiting* writer freeze out
+    // readers (which macOS's writer-preferring pthread_rwlock does). We spin
+    // on trywrlock instead of a blocking wrlock: while we're merely retrying
+    // (not queued as a waiter), concurrent readers can still take the lock.
+    //
+    // This is load-bearing for the JIT: task_run_current holds mem->lock as a
+    // READER for the duration of each JIT quantum and re-acquires it every
+    // ~1024 blocks. Under a blocking writer-preferring wrlock, one thread
+    // requesting the write lock (mmap/munmap/CoW, e.g. JSC's GC sweep) freezes
+    // EVERY other JIT thread at its next read_wrlock — and if the writer is
+    // itself waiting on those threads to reach a GC safepoint, the whole VM
+    // deadlocks (observed intermittently in claude-cli startup). Spinning
+    // keeps readers live so they can progress and release, letting the writer
+    // eventually win a trylock.
+    //
+    // We must NEVER fall back to a blocking pthread_rwlock_wrlock here. That is
+    // writer-preferring on macOS/iOS: the moment this thread queues as a waiter,
+    // every subsequent reader blocks until we run — and if we (the writer, e.g.
+    // JSC's GC doing an mmap/munmap sweep) are ourselves waiting for those
+    // reader threads to reach a GC safepoint, the whole VM deadlocks. That is
+    // exactly the intermittent claude/bun startup hang this trylock-spin exists
+    // to prevent. It reproduces far more easily on-device (iOS): slower cores
+    // mean JIT readers hold mem->lock across a longer quantum, so any bounded
+    // spin budget is more likely to be exhausted and hit the blocking fallback.
+    //
+    // The original concern with an unbounded trylock-spin was burning a full
+    // core (livelock) while readers are continuously present. We avoid that
+    // WITHOUT ever blocking: back off to a steady sleep so the spinning writer
+    // yields the CPU each iteration (it is not a busy-spin), and readers keep
+    // making progress and releasing until the writer wins a trylock. This keeps
+    // forward progress for readers guaranteed and the writer non-blocking.
+    struct timespec _ts = {0, 1000}; // 1us initial backoff, grows to a steady sleep
+    while (pthread_rwlock_trywrlock(&lock->l) != 0) {
+        nanosleep(&_ts, NULL);
+        if (_ts.tv_nsec < 100000) // ramp up to a 100us steady sleep (yields CPU)
+            _ts.tv_nsec *= 2;
+    }
     assert(lock->val == 0);
     lock->val = -1;
     lock->file = file;
@@ -151,6 +231,14 @@ static inline void __write_wrlock(wrlock_t *lock, const char *file, int line) {
     lock->pid = current_pid();
 }
 #define write_wrlock(lock) __write_wrlock(lock, __FILE__, __LINE__)
+static inline bool write_wrtrylock(wrlock_t *lock) {
+    int err = pthread_rwlock_trywrlock(&lock->l);
+    if (err == EBUSY) return false;
+    if (err != 0) __builtin_trap();
+    assert(lock->val == 0);
+    lock->val = -1;
+    return true;
+}
 static inline void write_wrunlock(wrlock_t *lock) {
     assert(lock->val == -1);
     lock->val = lock->line = lock->pid = 0;

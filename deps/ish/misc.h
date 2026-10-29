@@ -22,7 +22,21 @@
 
 // compiler check
 #define is_gcc(version) (__GNUC__ >= version)
-#define is_clang(version) (__clang_major__ >= version)
+
+// Cached check for ISH_EXEC_TRACE env var. getenv() walks the entire
+// environ table and is called from hot paths (every sys_write, every
+// INT_GPF diagnostic, etc.), so cache the result at first use. The env
+// var is only read once at host startup — if the user needs to change
+// it they restart ish.
+#ifndef __KERNEL__
+#include <stdlib.h>
+static inline bool ish_exec_trace(void) {
+    static int cached = -1;
+    if (cached < 0)
+        cached = (getenv("ISH_EXEC_TRACE") != NULL) ? 1 : 0;
+    return cached != 0;
+}
+#endif
 
 #if !defined(__has_attribute)
 #define has_attribute(x) 0
@@ -110,7 +124,11 @@ typedef int32_t sdword_t;
 typedef uint16_t word_t;
 typedef uint8_t byte_t;
 
+#ifdef GUEST_ARM64
+typedef uint64_t addr_t;
+#else
 typedef dword_t addr_t;
+#endif
 typedef dword_t uint_t;
 typedef sdword_t int_t;
 
@@ -118,7 +136,11 @@ typedef sdword_t pid_t_;
 typedef dword_t uid_t_;
 typedef word_t mode_t_;
 typedef sqword_t off_t_;
+#ifdef GUEST_ARM64
+typedef sqword_t time_t_;
+#else
 typedef dword_t time_t_;
+#endif
 typedef dword_t clock_t_;
 
 #define uint(size) glue3(uint,size,_t)

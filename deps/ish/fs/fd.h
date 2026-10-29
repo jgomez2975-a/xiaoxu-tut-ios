@@ -19,9 +19,20 @@ struct fd {
     struct list poll_fds;
     lock_t poll_lock;
     unsigned long offset;
+    // Links this fd into the global pidfd registry (pidfd_open only).
+    struct list pidfd_links;
 
     // fd data
     union {
+        // pidfd (pidfd_open): references a process by pid
+        struct {
+            pid_t_ pid;
+            // Set true by pidfd_notify_exit when `pid` becomes a zombie. Read
+            // lock-free by pidfd_poll so polling never takes pids_lock (which
+            // would create a poll->lock <-> pids_lock ABBA against the exit
+            // path that wakes pidfd pollers while holding pids_lock).
+            _Atomic bool exited;
+        } pidfd;
         // tty
         struct {
             struct tty *tty;
@@ -51,6 +62,16 @@ struct fd {
             uint8_t unix_name_len;
             char unix_name[108];
             struct fd *unix_peer; // locked by peer_lock, for simplicity
+            // AF_NETLINK stub: the write end of the backing socketpair
+            // (-1 for every non-netlink socket), the groups bind() asked
+            // for, and whether a dump whose replies did not all fit the
+            // queue is still owed its NLMSG_DONE, and the receive timeout.
+            // See fs/sock.c.
+            int netlink_peer_fd;
+            uint32_t netlink_groups;
+            uint32_t netlink_owe_seq;
+            bool netlink_owe_done;
+            long netlink_rcvtimeo_ms; // SO_RCVTIMEO; 0 = wait
             cond_t unix_got_peer;
             // Queue of struct scm for sending file descriptors
             // locked by fd->lock
@@ -97,9 +118,22 @@ struct fd {
     // fs/inode data
     struct mount *mount;
     int real_fd; // seeks on this fd require the lock TODO think about making a special lock just for that
+    // [T-ish-flock-proxy] host fd + 1 of this open file's flock proxy (see
+    // realfs_flock), 0 if it never took a flock
+    _Atomic int flock_proxy;
     DIR *dir;
     struct inode_data *inode;
     ino_t fake_inode;
+    // [T-ish-exec-fewer-meta-txns] fakefs_open reads the stat row inside the
+    // transaction it already holds for the path lookup and parks it here; the
+    // first fstat after open (generic_openat's own) consumes it instead of
+    // opening a second meta.db transaction. One-shot, so any later fstat sees
+    // chmod/chown done by other tasks. Cleared by generic_openat regardless.
+    struct { uint32_t mode, uid, gid, rdev; bool valid; } fake_open_stat;
+    // The stat generic_openat obtained at open time. exec used to fstat the
+    // fd again right after open, which on fakefs is a third meta.db
+    // transaction per exec for a value it already had.
+    struct statbuf open_stat;
     struct statbuf stat; // for adhoc fs
     struct fd_sockrestart sockrestart; // argh
 
@@ -184,6 +218,7 @@ void fdtable_do_cloexec(struct fdtable *table);
 struct fd *fdtable_get(struct fdtable *table, fd_t f);
 
 struct fd *f_get(fd_t f);
+struct fd *f_get_retained(fd_t f);
 // steals a reference to the fd, gives it to the table on success and destroys it on error
 // flags is checked for O_CLOEXEC and O_NONBLOCK
 fd_t f_install(struct fd *fd, int flags);

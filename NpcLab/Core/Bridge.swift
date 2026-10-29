@@ -75,7 +75,7 @@ struct Bridge {
         guard let r = req(path, method: method, body: body, timeout: timeout) else {
             throw BridgeError.badURL
         }
-        let (data, resp) = try await URLSession.shared.data(for: r)
+        let (data, resp) = try await MITMInterceptor.session.data(for: r)
         guard let http = resp as? HTTPURLResponse else { throw BridgeError.offline }
         if http.statusCode >= 400 {
             let msg = String(data: data, encoding: .utf8) ?? ""

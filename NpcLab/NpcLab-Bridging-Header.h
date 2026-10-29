@@ -11,4 +11,6 @@
 #import "NpcLinux.h"
 #import "NpcUnzip.h"
 
+#import <CommonCrypto/CommonDigest.h>
+
 #endif

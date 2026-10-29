@@ -2,15 +2,15 @@
 #include "kernel/task.h"
 #include "kernel/personality.h"
 
-pid_t_ sys_getpid(void) {
+pid_t_ sys_getpid() {
     STRACE("getpid()");
     return current->tgid;
 }
-pid_t_ sys_gettid(void) {
+pid_t_ sys_gettid() {
     STRACE("gettid()");
     return current->pid;
 }
-pid_t_ sys_getppid(void) {
+pid_t_ sys_getppid() {
     STRACE("getppid()");
     pid_t_ ppid;
     lock(&pids_lock);
@@ -22,20 +22,20 @@ pid_t_ sys_getppid(void) {
     return ppid;
 }
 
-dword_t sys_getuid32(void) {
+dword_t sys_getuid32() {
     STRACE("getuid32()");
     return current->uid;
 }
-dword_t sys_getuid(void) {
+dword_t sys_getuid() {
     STRACE("getuid()");
     return current->uid & 0xffff;
 }
 
-dword_t sys_geteuid32(void) {
+dword_t sys_geteuid32() {
     STRACE("geteuid32()");
     return current->euid;
 }
-dword_t sys_geteuid(void) {
+dword_t sys_geteuid() {
     STRACE("geteuid()");
     return current->euid & 0xffff;
 }
@@ -87,20 +87,20 @@ int_t sys_setreuid(uid_t_ ruid, uid_t_ euid) {
     return sys_setresuid(ruid, euid, -1);
 }
 
-dword_t sys_getgid32(void) {
+dword_t sys_getgid32() {
     STRACE("getgid32()");
     return current->gid;
 }
-dword_t sys_getgid(void) {
+dword_t sys_getgid() {
     STRACE("getgid()");
     return current->gid & 0xffff;
 }
 
-dword_t sys_getegid32(void) {
+dword_t sys_getegid32() {
     STRACE("getegid32()");
     return current->egid;
 }
-dword_t sys_getegid(void) {
+dword_t sys_getegid() {
     STRACE("getegid()");
     return current->egid & 0xffff;
 }

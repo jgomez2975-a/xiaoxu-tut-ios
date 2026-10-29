@@ -5,18 +5,18 @@ build_rootfs.py —— 造一份 iSH fakefs 格式的 Alpine rootfs
 
 为什么需要这个脚本
 ------------------
-iSH 的内核是 **x86 用户态模拟器**：`deps/ish/vdso/meson.build` 里
-`clang -target i386-linux` 编 VDSO，`deps/linux/arch/ish` 是 i386 的
-ABI。也就是说 guest 里每一个 ELF 都必须是 i386（e_machine=0x03）。
+iSH 的内核是 **用户态模拟器**，guest 指令集由 meson 的 -Dguest_arch 决定：
+  · x86   → VDSO 用 -target i386-linux，guest ELF 必须是 i386（e_machine=0x03）
+  · arm64 → VDSO 用 -target aarch64-linux-gnu，guest ELF 必须是 aarch64（0xb7）
 
-如果 rootfs 是 aarch64（e_machine=0xb7）：
+如果 rootfs 架构跟内核模拟目标不一致：
   · execve 一律返回 -ENOEXEC
   · 内核启 /sbin/init 失败 → die() → 整个进程 SIGILL 消失（"点终端闪退"）
   · 就算不崩，busybox / radare2 / python3 一个都跑不起来
 
-所以 rootfs 的架构不是随便挑的，它必须跟内核的模拟目标一致。
-本脚本把「下载 Alpine → 按依赖装包 → 打成 fakefs → 切段」全做完，
-架构用 --arch 指定，默认 x86（对应上游 iSH 内核）。
+所以 rootfs 的架构必须跟内核的模拟目标一致。
+本脚本把「下载 Alpine → 按依赖装包 → 打成 fakefs → 切段」全做完。
+默认 aarch64（对应 OpenMinis/ish-arm64 内核，能装 r2ghidra 出 Ghidra 伪代码）。
 
 fakefs 是什么
 -------------
@@ -30,10 +30,10 @@ iSH 不用真实文件系统当根，而是：
 
 用法
 ----
-    python3 Tools/build_rootfs.py                  # x86，出 zip + 切段
+    python3 Tools/build_rootfs.py                  # aarch64，出 zip + 切段
     python3 Tools/build_rootfs.py --keep-stage     # 保留中间目录，方便看
     python3 Tools/build_rootfs.py --check          # 只校验现有 zip 的架构
-    python3 Tools/build_rootfs.py --arch aarch64   # 将来换 iSH-ARM64 时用
+    python3 Tools/build_rootfs.py --arch x86       # 换回 i386 内核时用
 
 只依赖 Python 3 标准库（sqlite3 / zipfile / tarfile / urllib）。
 """
@@ -63,18 +63,23 @@ MIRRORS = [
     "https://mirrors.aliyun.com/alpine",
     "https://dl-cdn.alpinelinux.org/alpine",
 ]
-BRANCH = "v3.20"
-POINT = "3.20.9"
+# edge 滚动分支：只有 edge 的 testing 仓库才有 r2ghidra（6.2.4），
+# 且它要配 edge 的 radare2 6.2.4 一起装（稳定版 v3.20/3.21 只有 radare2 5.9.x，
+# 版本对不上，装不了 r2ghidra）。所以为了 Ghidra 级伪代码，rootfs 上 edge。
+BRANCH = "edge"
+POINT = "20260805"  # edge 的 minirootfs 用日期命名（daily snapshot）
 
 # 架构表：--arch 名字 → (Alpine 架构名, 内核是否模拟它)
 ARCHES = {
     "x86": ("x86", "i386 32 位 —— 上游 ish-app/ish 内核模拟的就是它"),
     "aarch64": ("aarch64", "ARM64 —— 只有 OpenMinis/ish-arm64 分支能跑"),
 }
+DEFAULT_ARCH = "aarch64"
 
 # 要装进去的包。minirootfs 自带的（busybox/musl/apk-tools…）不重复装。
 PKGS = [
     "radare2",                # 逆向主力：r2 / rabin2 / rahash2 / rafind2 …
+    "r2ghidra",               # Ghidra 级反编译器插件（edge/testing，配 radare2 6.2.4）
     "python3",                # 3.12，写脚本、跑 poC
     "binutils",               # nm / objdump / readelf / strings
     "file",                   # 文件类型识别
@@ -88,6 +93,8 @@ PKGS = [
     "ncurses-terminfo-base",  # nano / less / top 要 terminfo 才不会报错
     "ca-certificates-bundle", # curl / python 走 https 用
     "tzdata",                 # 时区，日志时间才不是 UTC
+    "py3-capstone",           # capstone 反汇编（Python 绑定），指令级分析
+    "llvm",                   # llvm-otool / llvm-nm，Mach-O 头/段/依赖/类列表
 ]
 
 # minirootfs 里已有的包不再覆盖安装：版本不会差，覆盖反而可能丢符号链接
@@ -152,9 +159,10 @@ def parse_index(text):
 
 
 def load_indexes(arch):
-    """返回 (包名→信息, 提供者→包名)"""
+    """返回 (包名→信息, 提供者→包名)。main/community/testing 三个仓库，
+    testing 里有 r2ghidra。"""
     all_pkgs = {}
-    for repo in ("main", "community"):
+    for repo in ("main", "community", "testing"):
         rel = "%s/%s/%s/APKINDEX.tar.gz" % (BRANCH, repo, arch)
         path = fetch(rel, "APKINDEX-%s-%s-%s.tar.gz" % (BRANCH, repo, arch))
         with tarfile.open(path, "r:gz") as t:
@@ -484,9 +492,9 @@ cd "$HOME" 2>/dev/null
 """
 
 MOTD = """
-  NpcLab 内置 Alpine (i386) —— 本机运行，不连任何节点
+  NpcLab 内置 Alpine (aarch64) —— 本机运行，不连任何节点
   ────────────────────────────────────────────────
-  r2 / rabin2 / objdump / nm  逆向
+  r2 / r2ghidra / rabin2 / objdump / nm  逆向
   python3                     脚本
   apk add <pkg>               装东西（走宿主网络）
   文件放在 /root/npc，和 App 里「本机文件」是同一个地方
@@ -506,7 +514,7 @@ def apply_overlay(tree, arch):
     tree.add_bytes("etc/motd", MOTD.encode(), 0o100644)
     tree.add_bytes("etc/apk/arch", (arch + "\n").encode(), 0o100644)
     tree.add_bytes("etc/apk/repositories",
-                   ("%s/%s/main\n%s/%s/community\n" % (MIRROR, BRANCH, MIRROR, BRANCH)).encode(),
+                   ("%s/%s/main\n%s/%s/community\n%s/%s/testing\n" % (MIRROR, BRANCH, MIRROR, BRANCH, MIRROR, BRANCH)).encode(),
                    0o100644)
     # world 让 guest 里 `apk add` 的依赖解析不会把已装的包当外人
     tree.add_bytes("etc/apk/world", ("\n".join(PKGS) + "\n").encode(), 0o100644)
@@ -571,7 +579,7 @@ def build(arch, keep_stage):
     os.makedirs(stage)
     tree = Tree(stage)
 
-    # 1. minirootfs
+    # 1. minirootfs（edge 分支用日期命名：alpine-minirootfs-20260805-aarch64.tar.gz）
     mini_name = "alpine-minirootfs-%s-%s.tar.gz" % (POINT, apk_arch)
     say("拉 minirootfs %s" % mini_name)
     mini = fetch("%s/releases/%s/%s" % (BRANCH, apk_arch, mini_name), mini_name)
@@ -635,7 +643,7 @@ def build(arch, keep_stage):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arch", default="x86", choices=list(ARCHES))
+    ap.add_argument("--arch", default=DEFAULT_ARCH, choices=list(ARCHES))
     ap.add_argument("--keep-stage", action="store_true")
     ap.add_argument("--check", action="store_true", help="只校验现有 zip")
     ap.add_argument("--zip", default=os.path.join(RES, "alpine-rootfs.zip"))

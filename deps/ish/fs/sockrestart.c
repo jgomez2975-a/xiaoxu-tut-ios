@@ -49,7 +49,7 @@ void sockrestart_end_listen_wait(struct fd *sock) {
     unlock(&sockrestart_lock);
 }
 
-bool sockrestart_should_restart_listen_wait(void) {
+bool sockrestart_should_restart_listen_wait() {
     lock(&sockrestart_lock);
     bool punt = current->sockrestart.punt;
     current->sockrestart.punt = false;
@@ -73,7 +73,7 @@ static struct list saved_sockets = LIST_INITIALIZER(saved_sockets);
 
 // these should only be called from the main thread, but it's easiest to just lock for the whole time
 
-void sockrestart_on_suspend(void) {
+void sockrestart_on_suspend() {
     lock(&sockrestart_lock);
     assert(list_empty(&saved_sockets));
     struct fd *sock;
@@ -93,7 +93,7 @@ void sockrestart_on_suspend(void) {
     unlock(&sockrestart_lock);
 }
 
-void sockrestart_on_resume(void) {
+void sockrestart_on_resume() {
     lock(&sockrestart_lock);
     struct saved_socket *saved, *tmp;
     list_for_each_entry_safe(&saved_sockets, saved, tmp, saved) {

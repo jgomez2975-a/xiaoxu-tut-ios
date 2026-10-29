@@ -73,7 +73,8 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 1.5 rootfs：仓库里存的是 10MB 一段、共 14 段，先按 manifest 拼回 139MB 的单文件
+# 1.5 rootfs：仓库里存的是分段文件，先按 manifest 拼回单文件（aarch64 会更大，
+#    因为多了 r2ghidra + radare2 6.x + llvm，段数和总大小以 manifest 为准）
 # ---------------------------------------------------------------------------
 say "检查 rootfs"
 bash Tools/join_rootfs.sh
@@ -147,11 +148,11 @@ else
 fi
 
 # 4.2b rootfs 的 ELF 架构必须跟内核的模拟目标一致。
-# 内核是 i386 模拟器，rootfs 却是 aarch64 的话：execve 全部 -ENOEXEC，
-# 内核启 init 失败 → die() → 点终端直接闪退，而包本身看起来完全正常。
-# 这个错犯过一次，所以卡在打包这一步，不许再静默过。
+# 内核是 ARM64 guest 模拟器（-Dguest_arch=arm64），rootfs 却还是 i386 的话：
+# execve 全部 -ENOEXEC，内核启 init 失败 → die() → 点终端直接闪退，
+# 而包本身看起来完全正常。这个错犯过一次，所以卡在打包这一步，不许再静默过。
 if [ -f "$APP/alpine-rootfs.zip" ]; then
-    python3 Tools/build_rootfs.py --check --zip "$APP/alpine-rootfs.zip" \
+    python3 Tools/build_rootfs.py --check --arch aarch64 --zip "$APP/alpine-rootfs.zip" \
         || die "rootfs 架构与内核不匹配（见上），这个包出去也是点终端就闪退"
 fi
 

@@ -108,6 +108,30 @@ dword_t sys_setrlimit32(dword_t resource, addr_t rlim_addr) {
     return rlimit_set(current, resource, rlimit);
 }
 
+// 64-bit getrlimit/setrlimit for ARM64 (struct rlimit with 64-bit cur/max)
+dword_t sys_getrlimit64(dword_t resource, addr_t rlim_addr) {
+    STRACE("getrlimit64(%d)", resource);
+    struct rlimit_ rlimit;
+    int err = rlimit_get(current, resource, &rlimit);
+    if (err < 0)
+        return err;
+    STRACE(" {cur=%#llx, max=%#llx}", (unsigned long long)rlimit.cur, (unsigned long long)rlimit.max);
+    if (user_put(rlim_addr, rlimit))
+        return _EFAULT;
+    return 0;
+}
+
+dword_t sys_setrlimit64(dword_t resource, addr_t rlim_addr) {
+    struct rlimit_ rlimit;
+    if (user_get(rlim_addr, rlimit))
+        return _EFAULT;
+    STRACE("setrlimit64(%d, {cur=%#llx, max=%#llx})", resource, (unsigned long long)rlimit.cur, (unsigned long long)rlimit.max);
+    int err = check_setrlimit(resource, rlimit);
+    if (err < 0)
+        return err;
+    return rlimit_set(current, resource, rlimit);
+}
+
 dword_t sys_prlimit64(pid_t_ pid, dword_t resource, addr_t new_limit_addr, addr_t old_limit_addr) {
     STRACE("prlimit64(%d, %d)", pid, resource);
     if (pid != 0)
@@ -136,7 +160,21 @@ dword_t sys_prlimit64(pid_t_ pid, dword_t resource, addr_t new_limit_addr, addr_
     return 0;
 }
 
-struct rusage_ rusage_get_current(void) {
+// [T-ish-port-leak-probe] Mach-port accounting hooks for the embedding app.
+//
+// The real implementations live in the Minis app's Swift side
+// (ResourceDiagnostics, exported via @_cdecl) and exist only when this
+// translation unit is linked into that app. Weak no-op defaults here mean
+// every other target — the standalone native/CLI build in particular — links
+// without them; the strong Swift definitions override these when present.
+//
+// Same pattern and rationale as `restore_termios` in kernel/exit.c.
+#if __APPLE__
+__attribute__((weak)) void minis_diag_note_thread_port_acquired(void) {}
+__attribute__((weak)) void minis_diag_note_thread_port_released(void) {}
+#endif
+
+struct rusage_ rusage_get_current() {
     // only the time fields are currently implemented
     struct rusage_ rusage;
 #if __linux__
@@ -150,7 +188,20 @@ struct rusage_ rusage_get_current(void) {
 #elif __APPLE__
     thread_basic_info_data_t info;
     mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
-    thread_info(mach_thread_self(), THREAD_BASIC_INFO, (thread_info_t) &info, &count);
+    // [T-ish-port-leak-probe] `mach_thread_self()` returns a SEND RIGHT that
+    // the caller owns and must deallocate. This call site never did, and it is
+    // reached from do_exit (exit.c:125) — i.e. exactly once per guest task
+    // teardown, which is the shape the field data shows: port_count tracked
+    // guestForks at a ratio of 1.000 over 93k forks.
+    //
+    // Deallocated below, and instrumented so the next run can PROVE the
+    // accounting rather than infer it. The counters are read by the app's
+    // ResourceDiagnostics sampler.
+    mach_port_t self_thread = mach_thread_self();
+    thread_info(self_thread, THREAD_BASIC_INFO, (thread_info_t) &info, &count);
+    minis_diag_note_thread_port_acquired();
+    if (mach_port_deallocate(mach_task_self(), self_thread) == KERN_SUCCESS)
+        minis_diag_note_thread_port_released();
     rusage.utime.sec = info.user_time.seconds;
     rusage.utime.usec = info.user_time.microseconds;
     rusage.stime.sec = info.system_time.seconds;
@@ -203,6 +254,7 @@ int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) 
     }
 
     unsigned cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    { const char *e = getenv("ISH_FAKE_NCPU"); if (e) { int n = atoi(e); if (n > 0) cpus = n; } }
     char cpuset[cpus / 8 + 1];
     if (cpusetsize < sizeof(cpuset))
         return _EINVAL;

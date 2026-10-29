@@ -34,12 +34,12 @@ jobs:
           bash Tools/join_rootfs.sh
           du -h NpcLab/Resources/alpine-rootfs.zip
           unzip -l NpcLab/Resources/alpine-rootfs.zip | tail -3
-          # 架构对不对，在这里就拦下：内核是 i386 模拟，rootfs 必须是 i386，
+          # 架构对不对，在这里就拦下：内核是 ARM64 guest 模拟，rootfs 必须是 aarch64，
           # 否则 execve 全 -ENOEXEC，装到手机上点终端直接闪退。
-          python3 Tools/build_rootfs.py --check --zip NpcLab/Resources/alpine-rootfs.zip
+          python3 Tools/build_rootfs.py --check --arch aarch64 --zip NpcLab/Resources/alpine-rootfs.zip
 
-      # llvm 不是可选项：iSH 的 VDSO 必须用 clang + lld 交叉编成 i386 ELF，
-      # Xcode 自带 clang 不认识 -fuse-ld=lld，缺 llvm 会停在 vdso/meson.build:19。
+      # llvm 不是可选项：iSH ARM64 的 VDSO 必须用 clang + lld 交叉编成 aarch64 ELF，
+      # Xcode 自带 clang 不认识 -fuse-ld=lld，缺 llvm 会停在 vdso/arm64/meson.build。
       # 注意：Homebrew 从 llvm 19 起把 lld 拆成独立公式，要单独装。
       - name: 装 meson / ninja / llvm / lld
         run: |
@@ -50,15 +50,15 @@ jobs:
           echo "/opt/homebrew/opt/lld/bin"  >> "$GITHUB_PATH"
           /opt/homebrew/opt/llvm/bin/clang --version | head -1
           command -v ld.lld
-          # 直接跑 iSH 自带的探测脚本，它过了 VDSO 就一定编得出来
-          bash deps/ish/vdso/check-cc.sh /opt/homebrew/opt/llvm/bin/clang
+          # 直接跑 iSH ARM64 分支自带的探测脚本，它过了 VDSO 就一定编得出来
+          bash deps/ish/vdso/arm64/check-cc-arm64.sh /opt/homebrew/opt/llvm/bin/clang
 
-      # 交叉编译 iSH 的 Linux 内核。第一次要 20-40 分钟，之后有缓存会快很多。
+      # 交叉编译 iSH 的 Linux 内核（ARM64 guest）。第一次要 20-40 分钟，之后有缓存会快很多。
       - name: 缓存 iSH 构建
         uses: actions/cache@v4
         with:
           path: deps/ish/build-ios
-          key: ish-v3-${{ runner.os }}-${{ hashFiles('deps/ish/meson.build') }}
+          key: ish-arm64-v1-${{ runner.os }}-${{ hashFiles('deps/ish/meson.build') }}
 
       - name: 编译 iSH 内核
         run: bash Tools/build_ish.sh

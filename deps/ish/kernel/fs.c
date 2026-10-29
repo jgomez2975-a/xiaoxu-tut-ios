@@ -6,8 +6,10 @@
 #include "kernel/task.h"
 #include "kernel/fs.h"
 #include "fs/fd.h"
+#include "fs/poll.h"
 #include "fs/path.h"
 #include "fs/dev.h"
+#include "fs/real.h"
 
 static struct fd *at_fd(fd_t f) {
     if (f == AT_FDCWD_)
@@ -74,11 +76,13 @@ fd_t sys_openat(fd_t at_f, addr_t path_addr, dword_t flags, mode_t_ mode) {
         apply_umask(&mode);
 
     struct fd *at = at_fd(at_f);
-    if (at == NULL)
+    if (at == NULL) {
         return _EBADF;
+    }
     struct fd *fd = generic_openat(at, path, flags, mode);
-    if (IS_ERR(fd))
+    if (IS_ERR(fd)) {
         return PTR_ERR(fd);
+    }
     return f_install(fd, flags);
 }
 
@@ -250,7 +254,84 @@ dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
     return res;
 }
 
+// Silently drop V8 fatal-abort chatter on stderr. V8 prints the fatal
+// preamble ("# Fatal error...", stack dump) to stderr BEFORE executing
+// BRK #0 — by the time our SIGTRAP handler fires in signal.c, the text
+// is already on the host terminal. Catching the prefixes at sys_write
+// lets us pretend the bytes went through while dropping them.
+//
+// IMPORTANT: Keep the prefix list VERY narrow — these are signatures
+// that essentially only V8's internal abort path emits. Once any ONE
+// is detected in a tgroup, every subsequent stderr write from that
+// tgroup is dropped (see v8_aborting flag). A false positive means
+// the rest of the program's stderr is lost, so we favor missing V8
+// noise over swallowing legitimate user output.
+static bool v8_abort_prefix(const char *buf, size_t size) {
+    if (size == 0) return false;
+    static const char *const prefixes[] = {
+        "# Fatal error in ",              // V8_Fatal preamble
+        "# Check failed:",                // V8 CHECK macro
+        "#FailureMessage Object",         // V8 FailureMessage dump
+        "----- Native stack trace -----", // V8 stack trace banner
+        "----- JavaScript stack trace -----",
+        "Attempt to print stack while printing stack",
+        "<--- Last few GCs --->",          // V8 OOM dump
+        // V8's FATAL() macro prints "FATAL ERROR: <reason>\n". Match on
+        // the specific V8/Node prefixes after "FATAL ERROR: " to avoid
+        // silencing user programs that happen to use the same banner.
+        "FATAL ERROR: v8::",               // e.g. v8::HandleScope::Create...
+        "FATAL ERROR: CALL_AND_RETRY_",    // V8 heap OOM
+        "FATAL ERROR: MarkCompactCollector",
+        "FATAL ERROR: Reached heap limit", // OOM
+        "FATAL ERROR: Scavenger",
+        "FATAL ERROR: NewSpace",
+        // V8 Runtime_Abort prints "abort: <reason>\n" via OS::PrintError.
+        // Known V8 abort reasons from src/runtime/runtime-internal.cc's
+        // GetAbortReason enum. Match only these specific strings so
+        // user programs that happen to print "abort: config not found"
+        // (etc.) aren't silenced.
+        "abort: Invalid bytecode",
+        "abort: Unreachable",
+        "abort: kOperandIsNotAFunction",
+        "abort: kOperandIsNotACallable",
+        "abort: kExpectedFeedbackVector",
+        "abort: kInvalidJumpTableIndex",
+        "abort: kStackFrameTypesMustMatch",
+        "abort: kUnexpectedFunctionKind",
+    };
+    // V8 sometimes coalesces the fatal banner with a leading "#\n" (an
+    // empty comment line) or surrounding preamble into a single write.
+    // Scan the first 256 bytes of the buffer rather than strictly matching
+    // from offset 0 so the multi-line banner is detected on whichever
+    // write carries the signature string.
+    size_t scan = size < 256 ? size : 256;
+    for (size_t i = 0; i < sizeof(prefixes)/sizeof(prefixes[0]); i++) {
+        size_t n = strlen(prefixes[i]);
+        if (scan < n) continue;
+        if (memmem(buf, scan, prefixes[i], n) != NULL)
+            return true;
+    }
+    return false;
+}
+
 static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
+    // Filter V8 fatal-abort chatter on stderr (fd 2).
+    // ISH_V8_NO_MUTE=1 bypasses the filter for debugging so we can see
+    // the actual crash output V8/Node writes before aborting.
+    static int mute_disabled = -1;
+    if (mute_disabled < 0)
+        mute_disabled = (getenv("ISH_V8_NO_MUTE") != NULL) ? 1 : 0;
+    if (!mute_disabled && fd_no == 2 && current != NULL && current->group != NULL) {
+        if (current->group->v8_aborting) {
+            // Already in V8 abort mode — silently drop all stderr writes
+            return size;
+        }
+        if (v8_abort_prefix((char *)buf, size)) {
+            current->group->v8_aborting = true;
+            return size;
+        }
+    }
+
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
         return _EBADF;
@@ -283,6 +364,7 @@ dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
     STRACE("write(%d, \"%.*s\", %d)", fd_no, print_size, buf, size);
 
     res = sys_write_buf(fd_no, buf, size);
+
 out:
     free(buf);
     return res;
@@ -296,6 +378,31 @@ out:
 // by the inefficiency of the emulator.
 
 static struct iovec_ *read_iovec(addr_t iovec_addr, unsigned iovec_count) {
+#ifdef GUEST_ARM64
+    // ARM64 uses 64-bit iovec structure (16 bytes per entry)
+    // We read the 64-bit version and convert to 32-bit for internal use
+    size_t iovec64_size = sizeof(struct iovec64_) * iovec_count;
+    struct iovec64_ *iovec64 = malloc(iovec64_size);
+    if (iovec64 == NULL)
+        return ERR_PTR(_ENOMEM);
+    if (user_read(iovec_addr, iovec64, iovec64_size)) {
+        free(iovec64);
+        return ERR_PTR(_EFAULT);
+    }
+
+    // Convert to 32-bit iovec for internal processing
+    struct iovec_ *iovec = malloc(sizeof(struct iovec_) * iovec_count);
+    if (iovec == NULL) {
+        free(iovec64);
+        return ERR_PTR(_ENOMEM);
+    }
+    for (unsigned i = 0; i < iovec_count; i++) {
+        iovec[i].base = (addr_t)iovec64[i].base;
+        iovec[i].len = (uint_t)iovec64[i].len;
+    }
+    free(iovec64);
+    return iovec;
+#else
     dword_t iovec_size = sizeof(struct iovec_) * iovec_count;
     struct iovec_ *iovec = malloc(iovec_size);
     if (iovec == NULL)
@@ -305,6 +412,7 @@ static struct iovec_ *read_iovec(addr_t iovec_addr, unsigned iovec_count) {
         return ERR_PTR(_EFAULT);
     }
     return iovec;
+#endif
 }
 
 static ssize_t iovec_size(struct iovec_ *iovec, unsigned iovec_count) {
@@ -414,6 +522,22 @@ dword_t sys_lseek(fd_t f, dword_t off, dword_t whence) {
     return res;
 }
 
+// 64-bit lseek for ARM64
+// Returns the new file position directly (not via pointer like _llseek)
+qword_t sys_lseek64(fd_t f, sqword_t off, dword_t whence) {
+    struct fd *fd = f_get(f);
+    if (fd == NULL)
+        return _EBADF;
+    if (!fd->ops->lseek)
+        return _ESPIPE;
+    lock(&fd->lock);
+    STRACE("lseek64(%d, %lld, %d)", f, (long long)off, whence);
+    off_t_ res = fd->ops->lseek(fd, off, whence);
+    STRACE(" -> %lld", (long long)res);
+    unlock(&fd->lock);
+    return res;
+}
+
 dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     STRACE("pread(%d, 0x%x, %d, %d)", f, buf_addr, size, off);
     struct fd *fd = f_get(f);
@@ -482,7 +606,158 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     return res;
 }
 
-static int fd_ioctl(struct fd *fd, dword_t cmd, dword_t arg) {
+// preadv/pwritev — ARM64 Linux ABI splits the loff_t offset into pos_l/pos_h
+// registers (5-argument syscall form), consistent with what musl's
+// src/unistd/pwritev.c emits. Combine them back into a 64-bit offset before
+// doing the pread/pwrite loop under fd->lock (like readv/writev).
+dword_t sys_preadv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+                   dword_t pos_l, dword_t pos_h) {
+    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
+    STRACE("preadv(%d, %#x, %d, %lld)", fd_no, iovec_addr, iovec_count, (long long)off);
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return _EBADF;
+    struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
+    if (IS_ERR(iovec))
+        return PTR_ERR(iovec);
+    size_t io_size = iovec_size(iovec, iovec_count);
+    char *buf = malloc(io_size);
+    if (buf == NULL) {
+        free(iovec);
+        return _ENOMEM;
+    }
+
+    lock(&fd->lock);
+    ssize_t res;
+    if (fd->ops->pread) {
+        res = fd->ops->pread(fd, buf, io_size, off);
+    } else if (fd->ops->lseek && fd->ops->read) {
+        off_t_ saved_off = fd->ops->lseek(fd, 0, LSEEK_CUR);
+        if ((res = fd->ops->lseek(fd, off, LSEEK_SET)) >= 0) {
+            res = fd->ops->read(fd, buf, io_size);
+            off_t_ lseek_res = fd->ops->lseek(fd, saved_off, LSEEK_SET);
+            assert(lseek_res >= 0);
+        }
+    } else {
+        res = _ESPIPE;
+    }
+    unlock(&fd->lock);
+    if (res < 0)
+        goto error;
+
+    size_t offset = 0;
+    size_t remaining = res;
+    for (unsigned i = 0; i < iovec_count && remaining > 0; i++) {
+        size_t chunk = iovec[i].len < remaining ? iovec[i].len : remaining;
+        if (user_write(iovec[i].base, buf + offset, chunk)) {
+            res = _EFAULT;
+            goto error;
+        }
+        offset += chunk;
+        remaining -= chunk;
+    }
+
+error:
+    free(buf);
+    free(iovec);
+    return res;
+}
+
+dword_t sys_pwritev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+                    dword_t pos_l, dword_t pos_h) {
+    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
+    STRACE("pwritev(%d, %#x, %d, %lld)", fd_no, iovec_addr, iovec_count, (long long)off);
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return _EBADF;
+    struct iovec_ *iovec = read_iovec(iovec_addr, iovec_count);
+    if (IS_ERR(iovec))
+        return PTR_ERR(iovec);
+    size_t io_size = iovec_size(iovec, iovec_count);
+    char *buf = malloc(io_size);
+    if (buf == NULL) {
+        free(iovec);
+        return _ENOMEM;
+    }
+
+    ssize_t res = 0;
+    size_t offset = 0;
+    for (unsigned i = 0; i < iovec_count; i++) {
+        if (user_read(iovec[i].base, buf + offset, iovec[i].len)) {
+            res = _EFAULT;
+            goto error;
+        }
+        offset += iovec[i].len;
+    }
+
+    lock(&fd->lock);
+    if (fd->ops->pwrite) {
+        res = fd->ops->pwrite(fd, buf, io_size, off);
+    } else if (fd->ops->lseek && fd->ops->write) {
+        off_t_ saved_off = fd->ops->lseek(fd, 0, LSEEK_CUR);
+        if ((res = fd->ops->lseek(fd, off, LSEEK_SET)) >= 0) {
+            res = fd->ops->write(fd, buf, io_size);
+            off_t_ lseek_res = fd->ops->lseek(fd, saved_off, LSEEK_SET);
+            assert(lseek_res >= 0);
+        }
+    } else {
+        res = _ESPIPE;
+    }
+    unlock(&fd->lock);
+
+error:
+    free(buf);
+    free(iovec);
+    return res;
+}
+
+// preadv2/pwritev2 — preadv/pwritev plus a per-call flags word. pos == -1
+// means "use the current file position" (stream form: same as readv/writev).
+// Bun reads tty/pipe stdin through preadv2(fd, iov, n, -1, 0) and treats a
+// raw ENOSYS as a dead stream — it tears down stdin and Claude Code's UI
+// stops seeing keys — so these must exist even though the flags they add are
+// mostly hints for us.
+#define RWF_HIPRI_  0x1
+#define RWF_DSYNC_  0x2
+#define RWF_SYNC_   0x4
+#define RWF_NOWAIT_ 0x8
+#define RWF_APPEND_ 0x10
+
+dword_t sys_preadv2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+                    dword_t pos_l, dword_t pos_h, dword_t flags) {
+    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
+    STRACE("preadv2(%d, %#x, %d, %lld, %#x)", fd_no, iovec_addr, iovec_count, (long long)off, flags);
+    if (flags & ~(RWF_HIPRI_|RWF_NOWAIT_))
+        return _EOPNOTSUPP;
+    if (flags & RWF_NOWAIT_) {
+        // Don't block: if no data is ready right now, fail with EAGAIN the
+        // way Linux does for a NOWAIT read that would sleep.
+        struct fd *fd = f_get(fd_no);
+        if (fd == NULL)
+            return _EBADF;
+        if (fd->ops->poll && !(fd->ops->poll(fd) & POLL_READ))
+            return _EAGAIN;
+    }
+    if (off == -1)
+        return sys_readv(fd_no, iovec_addr, iovec_count);
+    return sys_preadv(fd_no, iovec_addr, iovec_count, pos_l, pos_h);
+}
+
+dword_t sys_pwritev2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
+                     dword_t pos_l, dword_t pos_h, dword_t flags) {
+    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
+    STRACE("pwritev2(%d, %#x, %d, %lld, %#x)", fd_no, iovec_addr, iovec_count, (long long)off, flags);
+    // DSYNC/SYNC are stronger durability than we provide anywhere else and
+    // HIPRI is a hint; treat them all as best-effort. APPEND with an explicit
+    // offset changes semantics, so refuse it rather than silently mis-write.
+    if ((flags & RWF_APPEND_) && off != -1)
+        return _EOPNOTSUPP;
+    if (off == -1)
+        return sys_writev(fd_no, iovec_addr, iovec_count);
+    return sys_pwritev(fd_no, iovec_addr, iovec_count, pos_l, pos_h);
+}
+
+static int fd_ioctl(struct fd *fd, dword_t cmd, addr_t arg) {
     ssize_t size = -1;
     if (fd->ops->ioctl_size)
         size = fd->ops->ioctl_size(cmd);
@@ -515,8 +790,8 @@ static int set_nonblock(struct fd *fd, addr_t nb_addr) {
     return fd_setflags(fd, flags);
 }
 
-dword_t sys_ioctl(fd_t f, dword_t cmd, dword_t arg) {
-    STRACE("ioctl(%d, 0x%x, 0x%x)", f, cmd, arg);
+dword_t sys_ioctl(fd_t f, dword_t cmd, addr_t arg) {
+    STRACE("ioctl(%d, 0x%x, 0x%llx)", f, cmd, (unsigned long long)arg);
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
@@ -721,6 +996,56 @@ dword_t sys_fstatfs64(fd_t f, addr_t buf_addr) {
     return statfs64_mount(f_get(f)->mount, buf_addr);
 }
 
+#if defined(GUEST_ARM64)
+// ARM64 uses statfs (not statfs64) with a different structure layout
+// The structure uses 64-bit fields throughout (LP64 ABI)
+static int_t statfs_arm64_mount(struct mount *mount, addr_t buf_addr) {
+    struct statfsbuf buf = {};
+    int err = mount_statfs(mount, &buf);
+    if (err < 0)
+        return err;
+    struct statfs_arm64_ out_buf = {
+        .type = buf.type,
+        .bsize = buf.bsize,
+        .blocks = buf.blocks,
+        .bfree = buf.bfree,
+        .bavail = buf.bavail,
+        .files = buf.files,
+        .ffree = buf.ffree,
+        .fsid = {buf.fsid & 0xFFFFFFFF, buf.fsid >> 32},
+        .namelen = buf.namelen,
+        .frsize = buf.frsize,
+        .flags = buf.flags,
+    };
+    if (user_put(buf_addr, out_buf))
+        return _EFAULT;
+    return 0;
+}
+
+dword_t sys_statfs_arm64(addr_t path_addr, addr_t buf_addr) {
+    char path_raw[MAX_PATH];
+    if (user_read_string(path_addr, path_raw, sizeof(path_raw)))
+        return _EFAULT;
+    STRACE("statfs(\"%s\", %#llx)", path_raw, (unsigned long long)buf_addr);
+    char path[MAX_PATH];
+    int err = path_normalize(AT_PWD, path_raw, path, N_SYMLINK_NOFOLLOW);
+    if (err < 0)
+        return err;
+    struct mount *mount = mount_find(path);
+    err = statfs_arm64_mount(mount, buf_addr);
+    mount_release(mount);
+    return err;
+}
+
+dword_t sys_fstatfs_arm64(fd_t f, addr_t buf_addr) {
+    STRACE("fstatfs(%d, %#llx)", f, (unsigned long long)buf_addr);
+    struct fd *fd = f_get(f);
+    if (fd == NULL)
+        return _EBADF;
+    return statfs_arm64_mount(fd->mount, buf_addr);
+}
+#endif
+
 dword_t sys_flock(fd_t f, dword_t operation) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
@@ -737,8 +1062,9 @@ static dword_t sys_utime_common(fd_t at_f, addr_t path_addr, struct timespec ati
     if (path_addr != 0)
         if (user_read_string(path_addr, path, sizeof(path)))
             return _EFAULT;
-    STRACE("utimensat(%d, %s, {{%d, %d}, {%d, %d}}, %d)", at_f, path,
-            atime.tv_sec, atime.tv_nsec, mtime.tv_sec, mtime.tv_nsec, flags);
+    STRACE("utimensat(%d, %s, {{%lld, %lld}, {%lld, %lld}}, %d)", at_f, path,
+            (long long)atime.tv_sec, (long long)atime.tv_nsec,
+            (long long)mtime.tv_sec, (long long)mtime.tv_nsec, flags);
     struct fd *at = at_fd(at_f);
     if (at == NULL)
         return _EBADF;
@@ -833,6 +1159,9 @@ dword_t sys_fchown32(fd_t f, uid_t_ owner, uid_t_ group) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
+    // realfs can't change ownership on host, silently succeed
+    if (fd->mount->fs == &realfs)
+        return 0;
     int err;
     if (owner != (uid_t) -1) {
         err = generic_fsetattr(fd, make_attr(uid, owner));
@@ -855,6 +1184,9 @@ dword_t sys_fchownat(fd_t at_f, addr_t path_addr, dword_t owner, dword_t group, 
     struct fd *at = at_fd(at_f);
     if (at == NULL)
         return _EBADF;
+    // realfs can't change ownership on host, silently succeed
+    if (at != AT_PWD && at->mount->fs == &realfs)
+        return 0;
     int err;
     bool follow_links = flags & AT_SYMLINK_NOFOLLOW_ ? false : true;
     if (owner != (uid_t) -1) {
@@ -878,6 +1210,38 @@ dword_t sys_lchown(addr_t path_addr, uid_t_ owner, uid_t_ group) {
     return sys_fchownat(AT_FDCWD_, path_addr, owner, group, AT_SYMLINK_NOFOLLOW_);
 }
 
+#ifdef GUEST_ARM64
+// ARM64: 64-bit values passed in single registers
+dword_t sys_truncate64(addr_t path_addr, off_t_ size) {
+    STRACE("truncate64(%#x, %lld [0x%llx])", path_addr, (long long)size, (unsigned long long)size);
+    char path[MAX_PATH];
+    if (user_read_string(path_addr, path, sizeof(path)))
+        return _EFAULT;
+    return generic_setattrat(NULL, path, make_attr(size, size), true);
+}
+
+dword_t sys_ftruncate64(fd_t f, off_t_ size) {
+    STRACE("ftruncate64(%d, %lld [0x%llx])", f, (long long)size, (unsigned long long)size);
+    struct fd *fd = f_get(f);
+    if (fd == NULL)
+        return _EBADF;
+    return generic_fsetattr(fd, make_attr(size, size));
+}
+
+dword_t sys_fallocate(fd_t f, dword_t UNUSED(mode), off_t_ offset, off_t_ len) {
+    struct fd *fd = f_get(f);
+    if (fd == NULL)
+        return _EBADF;
+    struct statbuf statbuf;
+    int err = fd->mount->fs->fstat(fd, &statbuf);
+    if (err < 0)
+        return err;
+    if ((uint64_t) offset + (uint64_t) len > statbuf.size)
+        return generic_fsetattr(fd, make_attr(size, offset + len));
+    return 0;
+}
+#else
+// x86: 64-bit values split across two 32-bit registers
 dword_t sys_truncate64(addr_t path_addr, dword_t size_low, dword_t size_high) {
     off_t_ size = ((qword_t) size_high << 32) | size_low;
     char path[MAX_PATH];
@@ -908,6 +1272,7 @@ dword_t sys_fallocate(fd_t f, dword_t UNUSED(mode), dword_t offset_low, dword_t 
         return generic_fsetattr(fd, make_attr(size, offset + len));
     return 0;
 }
+#endif
 
 dword_t sys_mkdirat(fd_t at_f, addr_t path_addr, mode_t_ mode) {
     char path[MAX_PATH];
@@ -945,21 +1310,218 @@ dword_t sys_fsync(fd_t f) {
 }
 
 // a few stubs
-dword_t sys_sendfile(fd_t UNUSED(out_fd), fd_t UNUSED(in_fd), addr_t UNUSED(offset_addr), dword_t UNUSED(count)) {
-    return _EINVAL;
+dword_t sys_sendfile(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count) {
+    return sys_sendfile64(out_fd, in_fd, offset_addr, count);
 }
-dword_t sys_sendfile64(fd_t UNUSED(out_fd), fd_t UNUSED(in_fd), addr_t UNUSED(offset_addr), dword_t UNUSED(count)) {
-    return _EINVAL;
+dword_t sys_sendfile64(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count) {
+    STRACE("sendfile64(%d, %d, 0x%x, %d)", out_fd, in_fd, offset_addr, count);
+    struct fd *in = f_get(in_fd);
+    if (in == NULL)
+        return _EBADF;
+    struct fd *out = f_get(out_fd);
+    if (out == NULL)
+        return _EBADF;
+    if (!in->ops->read && !in->ops->pread)
+        return _EINVAL;
+    if (!out->ops->write)
+        return _EINVAL;
+
+    off_t_ offset = -1;
+    if (offset_addr != 0) {
+        if (user_get(offset_addr, offset))
+            return _EFAULT;
+    }
+
+    size_t remaining = count;
+    size_t total = 0;
+    char buf[4096];
+    while (remaining > 0) {
+        size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        ssize_t nread;
+        if (offset_addr != 0) {
+            if (!in->ops->pread)
+                return _EINVAL;
+            nread = in->ops->pread(in, buf, chunk, offset);
+        } else {
+            if (in->ops->read) {
+                nread = in->ops->read(in, buf, chunk);
+            } else {
+                nread = in->ops->pread(in, buf, chunk, in->offset);
+                if (nread > 0)
+                    in->offset += nread;
+            }
+        }
+        if (nread < 0)
+            return total > 0 ? (dword_t) total : (dword_t) nread;
+        if (nread == 0)
+            break;
+
+        ssize_t nwritten = out->ops->write(out, buf, nread);
+        if (nwritten < 0)
+            return total > 0 ? (dword_t) total : (dword_t) nwritten;
+
+        total += nwritten;
+        remaining -= nwritten;
+        if (offset_addr != 0)
+            offset += nwritten;
+
+        if (nwritten < nread)
+            break;
+    }
+
+    if (offset_addr != 0) {
+        if (user_put(offset_addr, offset))
+            return _EFAULT;
+    }
+    return total;
 }
 dword_t sys_splice(fd_t UNUSED(in_fd), addr_t UNUSED(in_off_addr), fd_t UNUSED(out_fd), addr_t UNUSED(out_off_addr), dword_t UNUSED(count), dword_t UNUSED(flags)) {
     return _EINVAL;
 }
-dword_t sys_copy_file_range(fd_t UNUSED(in_fd), addr_t UNUSED(in_off), fd_t UNUSED(out_fd),
-        addr_t UNUSED(out_off), dword_t UNUSED(len), uint_t UNUSED(flags)) {
-    return _EPERM; // good enough for ruby
+dword_t sys_copy_file_range(fd_t in_fd, addr_t in_off_addr, fd_t out_fd,
+        addr_t out_off_addr, dword_t len, uint_t flags) {
+    STRACE("copy_file_range(%d, 0x%x, %d, 0x%x, %d, %d)", in_fd, in_off_addr, out_fd, out_off_addr, len, flags);
+    if (flags != 0)
+        return _EINVAL;
+    struct fd *in = f_get(in_fd);
+    if (in == NULL)
+        return _EBADF;
+    struct fd *out = f_get(out_fd);
+    if (out == NULL)
+        return _EBADF;
+    if (!in->ops->read && !in->ops->pread)
+        return _EINVAL;
+    if (!out->ops->write && !out->ops->pwrite)
+        return _EINVAL;
+
+    off_t_ in_off = -1, out_off = -1;
+    if (in_off_addr != 0) {
+        if (user_get(in_off_addr, in_off))
+            return _EFAULT;
+    }
+    if (out_off_addr != 0) {
+        if (user_get(out_off_addr, out_off))
+            return _EFAULT;
+    }
+
+    char buf[4096];
+    dword_t remaining = len, total = 0;
+    while (remaining > 0) {
+        size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        ssize_t nread;
+        if (in_off >= 0) {
+            if (in->ops->pread) {
+                do { nread = in->ops->pread(in, buf, chunk, in_off); } while (nread == _EINTR);
+            } else {
+                do { nread = in->ops->read(in, buf, chunk); } while (nread == _EINTR);
+            }
+            if (nread > 0) in_off += nread;
+        } else {
+            if (in->ops->read) {
+                do { nread = in->ops->read(in, buf, chunk); } while (nread == _EINTR);
+            } else {
+                do { nread = in->ops->pread(in, buf, chunk, in->offset); } while (nread == _EINTR);
+                if (nread > 0) in->offset += nread;
+            }
+        }
+        if (nread <= 0) {
+            if (nread < 0 && total == 0) return nread;
+            break;
+        }
+
+        ssize_t nwritten;
+        if (out_off >= 0) {
+            if (out->ops->pwrite) {
+                do { nwritten = out->ops->pwrite(out, buf, nread, out_off); } while (nwritten == _EINTR);
+            } else {
+                do { nwritten = out->ops->write(out, buf, nread); } while (nwritten == _EINTR);
+            }
+            if (nwritten > 0) out_off += nwritten;
+        } else {
+            if (out->ops->write) {
+                do { nwritten = out->ops->write(out, buf, nread); } while (nwritten == _EINTR);
+            } else {
+                do { nwritten = out->ops->pwrite(out, buf, nread, out->offset); } while (nwritten == _EINTR);
+                if (nwritten > 0) out->offset += nwritten;
+            }
+        }
+        if (nwritten <= 0) {
+            if (nwritten < 0 && total == 0) return nwritten;
+            break;
+        }
+        total += nwritten;
+        remaining -= nwritten;
+        if (nwritten < nread)
+            break;
+    }
+
+    if (in_off_addr != 0) {
+        if (user_put(in_off_addr, in_off))
+            return _EFAULT;
+    }
+    if (out_off_addr != 0) {
+        if (user_put(out_off_addr, out_off))
+            return _EFAULT;
+    }
+    return total;
 }
 
 dword_t sys_xattr_stub(addr_t UNUSED(path_addr), addr_t UNUSED(name_addr),
         addr_t UNUSED(value_addr), dword_t UNUSED(size), dword_t UNUSED(flags)) {
     return _ENOTSUP;
 }
+
+#ifdef GUEST_ARM64
+// ARM64: posix_fadvise64 (syscall 223)
+// Advises the kernel about file access patterns.
+// Since we don't do kernel I/O optimization, we can safely ignore these hints.
+dword_t sys_fadvise64(fd_t f, uint64_t offset, uint64_t len, dword_t advice) {
+    STRACE("fadvise64(%d, %llu, %llu, %d)", f, offset, len, advice);
+
+    // Validate file descriptor
+    struct fd *fd = f_get(f);
+    if (fd == NULL)
+        return _EBADF;
+
+    // All advice values are valid hints that we simply ignore
+    // POSIX_FADV_NORMAL, POSIX_FADV_SEQUENTIAL, POSIX_FADV_RANDOM,
+    // POSIX_FADV_NOREUSE, POSIX_FADV_WILLNEED, POSIX_FADV_DONTNEED
+
+    return 0;  // Success - hint acknowledged (and ignored)
+}
+
+// ARM64: mincore (syscall 232)
+// Determines which pages of a memory mapping are currently in RAM.
+// For our emulator, we just pretend all pages are in memory.
+dword_t sys_mincore(addr_t addr, dword_t length, addr_t vec_addr) {
+    STRACE("mincore(%#x, %u, %#x)", addr, length, vec_addr);
+
+    // Page size is 4096
+    size_t page_size = 4096;
+    size_t pages = (length + page_size - 1) / page_size;
+
+    // Write 1 (page in memory) for each page
+    for (size_t i = 0; i < pages; i++) {
+        unsigned char in_mem = 1;
+        if (user_put(vec_addr + i, in_mem))
+            return _EFAULT;
+    }
+
+    return 0;  // Success
+}
+#else
+// x86: fadvise64 has different signature/calling convention
+dword_t sys_fadvise64(fd_t f, dword_t offset_low, dword_t offset_high,
+                      dword_t len_low, dword_t len_high, dword_t advice) {
+    uint64_t offset = ((uint64_t)offset_high << 32) | offset_low;
+    uint64_t len = ((uint64_t)len_high << 32) | len_low;
+
+    STRACE("fadvise64(%d, %llu, %llu, %d)", f, offset, len, advice);
+
+    struct fd *fd = f_get(f);
+    if (fd == NULL)
+        return _EBADF;
+
+    return 0;  // Success
+}
+#endif

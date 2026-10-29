@@ -37,7 +37,12 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
 
     // TODO really, really, seriously reconsider what I'm doing with the strings
     char path[MAX_PATH];
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_FOLLOW |
+    // O_NOFOLLOW has to be honored here rather than by handing the flag to the
+    // host open(): path_normalize resolves the final component itself, so by
+    // the time the fs open() runs the symlink is already gone. Leaving it
+    // unresolved makes the S_ISLNK check below return ELOOP, as Linux does.
+    int err = path_normalize(at, path_raw, path,
+            (flags & O_NOFOLLOW_ ? N_SYMLINK_NOFOLLOW : N_SYMLINK_FOLLOW) |
             (flags & O_CREAT_ ? N_PARENT_DIR_WRITE : 0));
     if (err < 0)
         return ERR_PTR(err);
@@ -51,15 +56,41 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
     }
     fd->mount = mount;
 
-    lock(&inodes_lock); // TODO: don't do this
     struct statbuf stat;
-    err = fd->mount->fs->fstat(fd, &stat);
-    if (err < 0) {
+    if (fd->inode != NULL) {
+        // [T-ish-openat-inode-early-ref] The filesystem already took the
+        // inode reference inside open() (fakefs does), so no concurrent
+        // path removal can orphan the row under us and fstat needs no lock.
+        // This is the hot path of a fork+exec storm: holding inodes_lock
+        // across fakefs_fstat's SQLite read was the convoy that parked 26
+        // threads here and 6 in inode_release (bt all, 2026-09-19) and
+        // 1484 in the 2026-09-18 IPS.
+        err = fd->mount->fs->fstat(fd, &stat);
+        if (err < 0)
+            goto error;
+    } else {
+        // Filesystems that do not pre-acquire keep d57b6d26's guarantee:
+        // "read the stat row" and "take the inode ref" are atomic against
+        // inode_release / inode_check_orphaned under inodes_lock.
+        lock(&inodes_lock); // TODO: don't do this
+        err = fd->mount->fs->fstat(fd, &stat);
+        if (err < 0) {
+            unlock(&inodes_lock);
+            goto error;
+        }
+        fd->inode = inode_get_unlocked(mount, stat.inode);
+        if (fd->inode == NULL) {
+            unlock(&inodes_lock);
+            err = _ENOMEM;
+            goto error;
+        }
         unlock(&inodes_lock);
-        goto error;
     }
-    fd->inode = inode_get_unlocked(mount, stat.inode);
-    unlock(&inodes_lock);
+    // [T-ish-exec-fewer-meta-txns] Whatever the fs did with its open-time
+    // stat cache, it must not outlive this open: a later fstat has to see
+    // current metadata. Keep the stat itself for exec.
+    fd->fake_open_stat.valid = false;
+    fd->open_stat = stat;
     fd->type = stat.mode & S_IFMT;
     fd->flags = flags;
 
@@ -71,7 +102,12 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
     if (err < 0)
         goto error;
 
-    assert(!S_ISLNK(fd->type)); // would mean path_normalize didn't do its job
+    if (S_ISLNK(fd->type)) {
+        // path_normalize should have resolved symlinks, but if it didn't,
+        // return an error instead of crashing the whole app.
+        err = _ELOOP;
+        goto error;
+    }
     if (S_ISBLK(fd->type) || S_ISCHR(fd->type)) {
         int type;
         if (S_ISBLK(fd->type))
@@ -147,6 +183,7 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
         err = _EPERM;
     else
         err = mount->fs->link(mount, src, dst);
+    path_cache_invalidate();
     mount_release(mount);
     mount_release(dst_mount);
     return err;
@@ -154,20 +191,27 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
 
 int generic_unlinkat(struct fd *at, const char *path_raw) {
     char path[MAX_PATH];
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW);
+    /* Include N_PARENT_DIR_WRITE so path_normalize checks write permission
+     * on the parent directory. This makes read-only bind mounts (whose
+     * top-level directory is mode 0555 in meta.db) reject `rm` with EACCES
+     * without needing any special case in fakefs. */
+    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
     if (err < 0)
         return err;
     struct mount *mount = find_mount_and_trim_path(path);
     err = _EPERM;
     if (mount->fs->unlink)
         err = mount->fs->unlink(mount, path);
+    path_cache_invalidate();
     mount_release(mount);
     return err;
 }
 
 int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw) {
     char src[MAX_PATH];
-    int err = path_normalize(src_at, src_raw, src, N_SYMLINK_NOFOLLOW);
+    /* Rename removes the src from its parent directory, so we also need
+     * write permission on src's parent — not just dst's. */
+    int err = path_normalize(src_at, src_raw, src, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
     if (err < 0)
         return err;
     char dst[MAX_PATH];
@@ -184,6 +228,7 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
         err = _EPERM;
     else
         err = mount->fs->rename(mount, src, dst);
+    path_cache_invalidate();
     mount_release(mount);
     mount_release(dst_mount);
     return err;
@@ -198,6 +243,7 @@ int generic_symlinkat(const char *target, struct fd *at, const char *link_raw) {
     err = _EPERM;
     if (mount->fs->symlink)
         err = mount->fs->symlink(mount, target, link);
+    path_cache_invalidate();
     mount_release(mount);
     return err;
 }
@@ -216,6 +262,7 @@ int generic_mknodat(struct fd *at, const char *path_raw, mode_t_ mode, dev_t_ de
     err = _EPERM;
     if (mount->fs->mknod)
         err = mount->fs->mknod(mount, path, mode, dev);
+    path_cache_invalidate();
     mount_release(mount);
     return err;
 }
@@ -268,6 +315,7 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
     err = _EPERM;
     if (mount->fs->mkdir)
         err = mount->fs->mkdir(mount, path, mode);
+    path_cache_invalidate();
     mount_release(mount);
     return err;
 }
@@ -283,6 +331,7 @@ int generic_rmdirat(struct fd *at, const char *path_raw) {
     err = _EPERM;
     if (mount->fs->rmdir)
         err = mount->fs->rmdir(mount, path);
+    path_cache_invalidate();
     mount_release(mount);
     return err;
 }

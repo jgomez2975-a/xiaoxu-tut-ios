@@ -143,7 +143,7 @@ final class AppSettings: ObservableObject {
     @Published var faceIDLock: Bool = false { didSet { save() } }
     @Published var allowFileRead: Bool = false { didSet { save() } }
     @Published var allowExec: Bool = false { didSet { save() } }
-    @Published var allowProxy: Bool = false { didSet { save() } }
+    @Published var allowProxy: Bool = false { didSet { save(); MITMInterceptor.shared.setEnabled(allowProxy) } }
 
     // ---- 开发者 ----
     @Published var hostRoots: [HostRoot] = [] { didSet { save() } }

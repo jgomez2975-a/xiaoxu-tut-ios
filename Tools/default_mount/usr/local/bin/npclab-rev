@@ -1,0 +1,48 @@
+#!/bin/sh
+# npclab-rev —— 逆向辅助：file / binutils / strings / capstone 一键查询
+# 对齐 AzTuT 的 file_query / binutils_query / capstone。rootfs 需带
+# file / binutils / llvm / py3-capstone。
+
+usage() {
+  echo "npclab-rev <子命令> <文件>"
+  echo "  file        文件类型识别（file -b）"
+  echo "  headers     头部 + 段（llvm-otool -h -l / readelf -h -l）"
+  echo "  deps        依赖库（llvm-otool -L / readelf -d）"
+  echo "  objc        ObjC 类列表（llvm-otool -o，Mach-O）"
+  echo "  symbols     符号表（llvm-nm / nm）"
+  echo "  strings     字符串（strings -a）"
+  echo "  disasm      反汇编（capstone，需 py3-capstone）"
+  echo "  sections    段/节（llvm-otool -l / readelf -S）"
+}
+
+f="$2"
+
+case "$1" in
+  file)    file -b "$f" ;;
+  headers) (llvm-otool -h -l "$f" 2>/dev/null || readelf -h -l "$f") | head -300 ;;
+  deps)    (llvm-otool -L "$f" 2>/dev/null || readelf -d "$f") | head -300 ;;
+  objc)    llvm-otool -o "$f" 2>/dev/null | head -400 ;;
+  symbols) (llvm-nm "$f" 2>/dev/null || nm "$f" 2>/dev/null) | head -400 ;;
+  strings) strings -a "$f" | head -400 ;;
+  sections) (llvm-otool -l "$f" 2>/dev/null | grep -A2 -i sectname || readelf -S "$f" 2>/dev/null) | head -300 ;;
+  disasm)
+    python3 - "$f" <<'PY'
+import capstone, sys
+from capstone import *
+d = open(sys.argv[1],'rb').read()
+# 自动识别架构：读 ELF/Mach-O 魔数
+arch = CS_ARCH_X86; mode = CS_MODE_32
+if d[:4] == b'\x7fELF':
+    arch = CS_ARCH_X86; mode = CS_MODE_64 if d[4] == 2 else CS_MODE_32
+elif d[:4] in (b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xca\xfe\xba\xbe'):
+    arch = CS_ARCH_ARM64; mode = CS_MODE_ARM
+md = Cs(arch, mode); md.detail = True
+n = 0
+for ins in md.disasm(d[:2048], 0):
+    print('0x%x:\t%s\t%s' % (ins.address, ins.mnemonic, ins.op_str))
+    n += 1
+    if n >= 64: break
+PY
+    ;;
+  *) usage ;;
+esac

@@ -114,7 +114,7 @@ final class ChatEngine: ObservableObject {
         if st.streamOn {
             return try await streamText(req, anthropic: isAnthropic)
         } else {
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await MITMInterceptor.session.data(for: req)
             guard let http = resp as? HTTPURLResponse else { throw BridgeError.offline }
             let raw = String(data: data, encoding: .utf8) ?? ""
             guard http.statusCode < 400 else {
@@ -139,7 +139,7 @@ final class ChatEngine: ObservableObject {
     }
 
     private func streamText(_ req: URLRequest, anthropic: Bool) async throws -> String {
-        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        let (bytes, resp) = try await MITMInterceptor.session.bytes(for: req)
         guard let http = resp as? HTTPURLResponse else { throw BridgeError.offline }
 
         if http.statusCode >= 400 {

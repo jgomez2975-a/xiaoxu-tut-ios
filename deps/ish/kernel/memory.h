@@ -9,20 +9,93 @@
 #include "util/sync.h"
 #include "misc.h"
 
+// Lazy reservation for MAP_NORESERVE regions (JSC heap cage, etc.).
+// Records address range and permissions without allocating page table entries.
+// Pages are materialized on demand when faulted. Used by both x86 and ARM64
+// guests so memory.c can call into the reservation API unconditionally.
+struct mem_reservation {
+    page_t start;
+    pages_t pages;
+    unsigned flags;
+    struct mem_reservation *next;
+};
+
+#ifdef GUEST_ARM64
+// ARM64: 4-level page table for 48-bit address space
+// L0[512] → L1[512] → L2[512] → L3[512 pt_entry]
+// 9+9+9+9 = 36-bit page number + 12-bit offset = 48-bit address
+#define PT_LEVELS 4
+#define PT_BITS 9
+#define PT_ENTRIES (1 << PT_BITS)  // 512
+
+// Extract level index from page number (36-bit page number)
+#define PT_INDEX(page, level) (((page) >> (PT_BITS * (3 - (level)))) & (PT_ENTRIES - 1))
+
+// Page table intermediate node (L0, L1, L2)
+struct pt_node {
+    void *children[PT_ENTRIES]; // pt_node* for L0-L2, pt_entry* array for L3
+};
+
+struct mem {
+    struct pt_node *pgdir;  // L0 node (512 entries)
+    int pgdir_used;
+
+    struct mmu mmu;
+
+    // Hint for pt_find_hole: start searching just below the last successful
+    // allocation instead of always from MMAP_HOLE_START. Reset on munmap
+    // when freed pages are above the hint. Avoids O(n) rescanning of already-
+    // allocated regions on every mmap(addr=0).
+    page_t mmap_hint;
+
+    struct mem_reservation *reservations;
+
+    wrlock_t lock;
+    lock_t cow_lock;
+};
+
+// Address space layout for ARM64 guest.
+// 48-bit address space with 4-level page table and 48-bit JIT masks.
+// Keep stack and mmap in the low 4GB region (same as x86) so that page table
+// walks are shallow (L0[0]→L1[0]→L2→L3 — the first two levels are always
+// index 0 and stay hot in cache). The 48-bit infrastructure remains available
+// for explicit high-address mmap hints (e.g., V8 CodeRange).
+#define STACK_TOP_PAGE    0xffffeULL        // guard page at 0xffffe000
+#define STACK_INIT_PAGE   0xffffdULL        // initial stack page (growsdown)
+#define STACK_TOP_ADDR    0xffffe000ULL     // SP starts here
+#define MMAP_HOLE_START   0xefffdULL        // mmap search starts here (same as x86)
+#define MMAP_HOLE_END     0x100ULL          // mmap search ends here (above guard pages)
+// Upper bound for valid user addresses (page number, 48-bit / 4K = 36-bit)
+#define USER_ADDR_MAX_PAGE  0xFFFFFFFFFULL
+
+#else
+// x86: 2-level flat page table for 32-bit address space
+// pgdir[1024] → pt_entry[1024]
+#define MEM_PGDIR_SIZE (1 << 10)
+
 struct mem {
     struct pt_entry **pgdir;
     int pgdir_used;
 
     struct mmu mmu;
 
+    page_t mmap_hint;
+
+    // Lazy MAP_NORESERVE reservations (V8 cage etc.). Shared with ARM64.
+    struct mem_reservation *reservations;
+
     wrlock_t lock;
+    lock_t cow_lock;
 };
-#define MEM_PGDIR_SIZE (1 << 10)
+#endif
 
 // Initialize the address space
 void mem_init(struct mem *mem);
 // Uninitialize the address space
 void mem_destroy(struct mem *mem);
+// Bump the memory-change generation (for page-backing mutations that bypass
+// pt_map/pt_unmap, e.g. madvise MADV_DONTNEED in-place zeroing).
+void mem_changed_pub(struct mem *mem);
 // Return the pagetable entry for the given page
 struct pt_entry *mem_pt(struct mem *mem, page_t page);
 // Increment *page, skipping over unallocated page directories. Intended to be
@@ -43,6 +116,9 @@ struct data {
     struct fd *fd;
     size_t file_offset;
     const char *name;
+    // Guest module id + 1 for the ARM64 JIT (asbestos/guest-arm64/jit.c), 0
+    // until looked up. Not under ISH_JIT: app code sees this struct too.
+    int jit_mod;
 #if LEAK_DEBUG
     int pid;
     addr_t dest;
@@ -69,9 +145,27 @@ struct pt_entry {
 #define P_ANONYMOUS (1 << 6)
 // mapping was created with MAP_SHARED, should not CoW
 #define P_SHARED (1 << 7)
+// W^X for the JIT: the page contains guest code that has been compiled into
+// fiber blocks. While set, no TLB entry may be stamped writable for the page
+// (translate_write_nofault refuses), so every guest store to it takes the
+// mem_ptr write-miss path, which invalidates the page's compiled blocks and
+// clears this flag (bumping mmu->changes) before the store is allowed to
+// land. Set by mmu_mark_code_page when a block is compiled from the page.
+#define P_CODE (1 << 8)
 
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
 page_t pt_find_hole(struct mem *mem, pages_t size);
+
+// Reservation API is available for both x86 and ARM64 guests.
+struct mem_reservation *mem_find_reservation(struct mem *mem, page_t page);
+void mem_remove_reservations(struct mem *mem, page_t start, pages_t pages);
+
+#ifdef GUEST_ARM64
+int pt_map_lazy(struct mem *mem, page_t start, pages_t pages, unsigned flags);
+// Find a hole for a V8-style large reservation. Prefers addresses
+// above 4GB so heap pointers are non-canonical in low 32 bits.
+page_t pt_find_hole_for_reservation(struct mem *mem, pages_t size);
+#endif
 
 // Map memory + offset into fake memory, unmapping existing mappings. Takes
 // ownership of memory. It will be freed with:
@@ -83,6 +177,27 @@ int pt_map_nothing(struct mem *mem, page_t page, pages_t pages, unsigned flags);
 int pt_unmap(struct mem *mem, page_t start, pages_t pages);
 // like pt_unmap but doesn't care if part of the range isn't mapped
 int pt_unmap_always(struct mem *mem, page_t start, pages_t pages);
+
+// [T-ish-cluster-commit] Commit the faulting page as part of an aligned,
+// host-page-sized cluster so a 4KB guest page doesn't consume a whole 16KB
+// host page. Degrades to a single-page commit whenever the cluster's other
+// pages are already mapped or `same_flags` rejects them; on a 4KB-page host
+// it is exactly pt_map_nothing(page, 1). Reports how many pages were actually
+// committed via `committed_out` (NULL if not needed) so callers can keep
+// anonymous-page accounting exact. Caller must hold mem->lock for WRITING.
+int pt_map_cluster(struct mem *mem, page_t page, unsigned flags,
+                   bool (*same_flags)(struct mem *mem, page_t page, void *ctx),
+                   void *ctx, pages_t *committed_out);
+
+// [T-ish-cluster-hitrate] Diagnostics: how often the cluster actually fires,
+// and when it does not, why. Any out-param may be NULL.
+void ish_cluster_stats(uint64_t *calls, uint64_t *full, uint64_t *single,
+                       uint64_t *why_mapped, uint64_t *why_flags,
+                       uint64_t *why_nocluster, uint64_t *why_enomem,
+                       uint64_t *pages_committed);
+// All anonymous host mmaps and the guest pages they backed, across every
+// path — the denominator the cluster hit rate has to be read against.
+void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages);
 // Set the flags on memory
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags);
 // Copy pages from src memory to dst memory using copy-on-write
@@ -91,6 +206,16 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
 // Must call with mem read-locked.
 void *mem_ptr(struct mem *mem, addr_t addr, int type);
 int mem_segv_reason(struct mem *mem, addr_t addr);
+
+// W^X code-page protection (see P_CODE). Both must be called with the mem
+// read-locked (JIT context). mmu_mark_code_page marks the page as containing
+// compiled code; returns 1 if the page transitioned to code (mmu->changes was
+// bumped, staling every thread's cached writable TLB entry), 0 if it was
+// already marked, -1 if the page isn't mapped (nothing to protect).
+// mmu_code_page_intact reports whether the mark is still in place — a store
+// that raced with compilation clears it.
+int mmu_mark_code_page(struct mmu *mmu, page_t page);
+bool mmu_code_page_intact(struct mmu *mmu, page_t page);
 
 extern size_t real_page_size;
 

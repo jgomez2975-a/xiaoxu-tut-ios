@@ -1,0 +1,43 @@
+#!/bin/sh
+# npclab-frida —— 动态注入辅助：列进程 / 注入 dylib / 跑 hook 脚本
+# 对齐 AzTuT 的 dylib_inject / FridaAppsView。frida 由 rootfs 提供。
+
+set -e
+
+usage() {
+  echo "npclab-frida <子命令>"
+  echo "  ps            列出本机进程（frida-ps -Uai 或 ps -A 兜底）"
+  echo "  inject <pid> <dylib>   把 dylib 注入 pid"
+  echo "  hook <pid|bundleId> <js>  对目标跑 Frida JS 脚本"
+}
+
+case "$1" in
+  ps)
+    frida-ps -Uai 2>/dev/null || frida-ps -ai 2>/dev/null || ps -A
+    ;;
+  inject)
+    [ -n "$2" ] && [ -n "$3" ] || { usage; exit 1; }
+    pid="$2"; dylib="$3"
+    # 用 frida 的 dlopen 注入；没有 frida 就退 opainject
+    if command -v frida >/dev/null 2>&1; then
+      frida -p "$pid" -e "Module.load('$dylib')" 2>&1
+    elif command -v opainject >/dev/null 2>&1; then
+      opainject "$pid" "$dylib" 2>&1
+    else
+      echo "没有 frida 也没有 opainject，注入不了" >&2
+      exit 1
+    fi
+    ;;
+  hook)
+    [ -n "$2" ] && [ -n "$3" ] || { usage; exit 1; }
+    target="$2"; js="$3"
+    if echo "$target" | grep -qE '^[0-9]+$'; then
+      frida -p "$target" -l "$js" 2>&1
+    else
+      frida -U -f "$target" -l "$js" 2>&1
+    fi
+    ;;
+  *)
+    usage
+    ;;
+esac

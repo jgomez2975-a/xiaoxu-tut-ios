@@ -98,8 +98,8 @@ int err_map(int err) {
     return -(err | 0x1000);
 }
 
-int errno_map(void) {
-    if (errno == EPIPE)
+int errno_map() {
+    if (errno == EPIPE && current != NULL)
         send_signal(current, SIGPIPE_, SIGINFO_NIL);
     return err_map(errno);
 }

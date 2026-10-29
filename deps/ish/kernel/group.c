@@ -55,7 +55,7 @@ out:
     return err;
 }
 
-dword_t sys_setpgrp(void) {
+dword_t sys_setpgrp() {
     return sys_setpgid(0, 0);
 }
 
@@ -73,7 +73,7 @@ pid_t_ sys_getpgid(pid_t_ pid) {
     unlock(&pids_lock);
     return pid;
 }
-pid_t_ sys_getpgrp(void) {
+pid_t_ sys_getpgrp() {
     return sys_getpgid(0);
 }
 
@@ -116,12 +116,12 @@ pid_t_ task_setsid(struct task *task) {
     return new_sid;
 }
 
-dword_t sys_setsid(void) {
+dword_t sys_setsid() {
     STRACE("setsid()");
     return task_setsid(current);
 }
 
-dword_t sys_getsid(void) {
+dword_t sys_getsid() {
     STRACE("getsid()");
     lock(&pids_lock);
     pid_t_ sid = current->group->sid;
