@@ -290,9 +290,9 @@ final class RevLocal: ObservableObject {
         guard let t = current, rt.stage.isReady, !busy else { return }
         setBusy(true, "还原 \(f.name)…")
         Task {
-            // pdg 是 r2ghidra（Alpine 包不带，缺了会直接报 Invalid command），
-            // 出不了就退 pdc，最后退反汇编。判"这次算不算成功"不能只看
-            // 输出非空 —— ERROR: 也是非空。
+            // pdg 是 r2ghidra 的 Ghidra 级伪代码（rootfs 已内置 r2ghidra 6.2.4，
+            // 装好后 pdgj 可用）。万一插件加载失败，退 pdc（r2 自带基础伪代码），
+            // 最后退反汇编。判"这次算不算成功"不能只看输出非空 —— ERROR: 也是非空。
             let cmds: [(String, String)] = [
                 ("pdgj", "ghidra"),
                 ("pdc", "r2pdc"),
