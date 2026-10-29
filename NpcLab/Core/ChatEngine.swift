@@ -22,7 +22,7 @@ final class ChatEngine: ObservableObject {
         guard !body.isEmpty || !images.isEmpty else { return }
         guard !streaming else { return }
 
-        if st.apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+        if st.activeProvider.apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
             err = "还没填 API Key（设置 → 模型）"
             return
         }
@@ -33,7 +33,7 @@ final class ChatEngine: ObservableObject {
         live = ""
         streaming = true
         st.log("对话", "发送 \(body.count) 字" + (images.isEmpty ? "" : " + \(images.count) 图")
-               + " · \(st.model)")
+               + " · \(st.activeProvider.model)")
 
         task = Task { [weak self] in
             guard let self else { return }
@@ -74,9 +74,10 @@ final class ChatEngine: ObservableObject {
     }
 
     private func run(_ st: AppSettings, system: String) async throws -> String {
-        var base = st.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prov = st.activeProvider
+        var base = prov.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         while base.hasSuffix("/") { base.removeLast() }
-        let isAnthropic = st.provider == "anthropic"
+        let isAnthropic = prov.isAnthropic
         let path = isAnthropic ? "/messages" : "/chat/completions"
         guard let url = URL(string: base + path) else { throw BridgeError.badURL }
 
@@ -84,15 +85,15 @@ final class ChatEngine: ObservableObject {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if isAnthropic {
-            req.setValue(st.apiKey, forHTTPHeaderField: "x-api-key")
+            req.setValue(prov.apiKey, forHTTPHeaderField: "x-api-key")
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         } else {
-            req.setValue("Bearer \(st.apiKey)", forHTTPHeaderField: "Authorization")
+            req.setValue("Bearer \(prov.apiKey)", forHTTPHeaderField: "Authorization")
         }
 
         let msgs = trimHistory(st)
         var payload: [String: Any] = [
-            "model": st.model,
+            "model": prov.model,
             "max_tokens": st.maxTokens,
             "temperature": st.temperature,
             "stream": st.streamOn

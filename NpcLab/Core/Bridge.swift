@@ -128,7 +128,13 @@ struct Bridge {
 
     func hostState() async throws -> [String: Any] { try await json("/api/host/state") }
     func hostEnabled(_ on: Bool) async throws -> [String: Any] {
-        try await json("/api/host/enabled", method: "POST", body: ["enabled": on])
+        try await json("/api/host/enabled", method: "POST", body: ["on": on])
+    }
+    /// 同步授权根到节点端 hostfs（对齐 /api/host/root：add / del）
+    func hostSetRoot(path: String, mode: String = "ro", del: Bool = false) async throws -> [String: Any] {
+        var b: [String: Any] = ["path": path, "mode": mode]
+        if del { b["action"] = "del" }
+        return try await json("/api/host/root", method: "POST", body: b)
     }
     func hostLs(_ path: String) async throws -> [String: Any] {
         try await json("/api/host/ls?path=\(esc(path))")

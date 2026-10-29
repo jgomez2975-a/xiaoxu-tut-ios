@@ -239,6 +239,66 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     }
 }
 
+// MARK: - 模型服务商（对齐 Minis 的多 Provider 实例）
+
+/// 一个可用的 LLM 服务商实例。Minis 的模型体系是「多 provider 并存」，
+/// 每个实例绑定一个服务商 + 独立 baseURL + key + 模型，可增删、可启用/禁用。
+struct ProviderInstance: Identifiable, Hashable, Codable {
+    var id = UUID()
+    var name: String = ""            // 唯一显示名 / label
+    var providerType: String = "openai"  // openai / anthropic / openRouter / xAI / gemini / kimiCode
+    var baseURL: String = "https://api.openai.com/v1"
+    var apiKey: String = ""
+    var model: String = "gpt-4o"
+    var isEnabled: Bool = true
+
+    /// 协议只有两类：Anthropic Messages API，其余全是 OpenAI 兼容 /chat/completions
+    var isAnthropic: Bool { providerType == "anthropic" }
+
+    /// 显示用服务商名
+    var providerLabel: String {
+        switch providerType {
+        case "anthropic": return "Anthropic"
+        case "openai": return "OpenAI"
+        case "openRouter": return "OpenRouter"
+        case "xAI": return "xAI (Grok)"
+        case "gemini": return "Google Gemini"
+        case "kimiCode": return "Kimi Code"
+        case "githubCopilot": return "GitHub Copilot"
+        default: return providerType
+        }
+    }
+
+    /// 该服务商的默认 baseURL（新建实例时预填）
+    static func defaultBaseURL(_ type: String) -> String {
+        switch type {
+        case "anthropic": return "https://api.anthropic.com/v1"
+        case "openRouter": return "https://openrouter.ai/api/v1"
+        case "xAI": return "https://api.x.ai/v1"
+        case "gemini": return "https://generativelanguage.googleapis.com/v1beta"
+        case "kimiCode": return "https://api.kimi.com/coding/v1"
+        case "githubCopilot": return "https://api.githubcopilot.com"
+        default: return "https://api.openai.com/v1"
+        }
+    }
+
+    /// 该服务商的默认模型名（新建实例时预填）
+    static func defaultModel(_ type: String) -> String {
+        switch type {
+        case "anthropic": return "claude-sonnet-4-5"
+        case "openRouter": return "openai/gpt-4o"
+        case "xAI": return "grok-3"
+        case "gemini": return "gemini-2.5-pro"
+        case "kimiCode": return "kimi-k2"
+        default: return "gpt-4o"
+        }
+    }
+
+    static let providerTypes: [String] = [
+        "openai", "anthropic", "openRouter", "xAI", "gemini", "kimiCode"
+    ]
+}
+
 // MARK: - 节点桥
 
 struct HostRoot: Identifiable, Hashable, Codable {

@@ -171,7 +171,7 @@ struct ChatView: View {
                                   : (st.bridgeOn ? "节点离线" : "纯本地"))
                 .font(T.mono(10.5)).foregroundColor(T.txt2)
             Spacer()
-            Pill(text: st.model.isEmpty ? "未设模型" : st.model, color: T.accent)
+            Pill(text: st.activeProvider.model.isEmpty ? "未设模型" : st.activeProvider.model, color: T.accent)
             Pill(text: st.skillMode == "index" ? "技能 20" : (st.skillMode == "full" ? "技能全文" : "技能关"),
                  color: st.skillMode == "off" ? T.txt3 : T.purple)
             Pill(text: st.toolLoop ? "工具开" : "纯对话",
@@ -346,7 +346,7 @@ struct ChatView: View {
                         let t = draft
                         let imgs = pendingImages
                         // 没 Key 就别把图吃掉——发不出去还留在输入区
-                        guard !st.apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
+                        guard !st.activeProvider.apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
                             engine.err = "还没填 API Key（设置 → 模型）"
                             return
                         }

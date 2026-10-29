@@ -14,6 +14,7 @@
 		9D8D86ACD5C68E657DC9B07D /* Bridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09547EA6053D75987BDB9798 /* Bridge.swift */; };
 		19FBB52E7BCF44B7C6B87389 /* ChatEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E605EC9C19A71E727E025377 /* ChatEngine.swift */; };
 		D4EAB79463D75672235C05E5 /* InjectEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38FAD6EF74C8709D5D8375CA /* InjectEngine.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* AppInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* AppInventory.swift */; };
 		748C0428B482D2ED03A842F6 /* LinuxRuntimeStub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EDFB5ED0E6CED84F6FA00AF /* LinuxRuntimeStub.swift */; };
 		D742137FF08BA0CA0943F3D1 /* LinuxTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E72405D6B8F01C4E30F2F8 /* LinuxTypes.swift */; };
 		7AD0BA3463BDACD308CC4796 /* LiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47736E2B13F1A15DBF9AAEE0 /* LiveActivity.swift */; };
@@ -102,6 +103,7 @@
 		42808F345143D940192F2399 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		DE839F391AE9B181EC4F683C /* NpcLabApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NpcLabApp.swift; sourceTree = "<group>"; };
 		1E12D5036B918DAFB0267958 /* AppLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLock.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5D /* AppInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInventory.swift; sourceTree = "<group>"; };
 		876D242CF9DC92D337C61F8D /* Attachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachment.swift; sourceTree = "<group>"; };
 		4F92E50B8E70177C74B368CF /* BashismScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BashismScanner.swift; sourceTree = "<group>"; };
 		09547EA6053D75987BDB9798 /* Bridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bridge.swift; sourceTree = "<group>"; };
@@ -337,6 +339,7 @@
 		3690689B5640B28569CFFA01 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F60718293A4B5D /* AppInventory.swift */,
 				1E12D5036B918DAFB0267958 /* AppLock.swift */,
 				876D242CF9DC92D337C61F8D /* Attachment.swift */,
 				4F92E50B8E70177C74B368CF /* BashismScanner.swift */,
@@ -602,6 +605,7 @@
 				9D8D86ACD5C68E657DC9B07D /* Bridge.swift in Sources */,
 				19FBB52E7BCF44B7C6B87389 /* ChatEngine.swift in Sources */,
 				D4EAB79463D75672235C05E5 /* InjectEngine.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* AppInventory.swift in Sources */,
 				748C0428B482D2ED03A842F6 /* LinuxRuntimeStub.swift in Sources */,
 				D742137FF08BA0CA0943F3D1 /* LinuxTypes.swift in Sources */,
 				7AD0BA3463BDACD308CC4796 /* LiveActivity.swift in Sources */,

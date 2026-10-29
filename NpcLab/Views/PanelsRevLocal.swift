@@ -49,10 +49,13 @@ struct LocalRevView: View {
 
     @ObservedObject private var eng = RevLocal.shared
     @ObservedObject private var rt = LinuxRuntime.shared
+    @ObservedObject private var inv = AppInventory.shared
 
     @State private var addPath = ""
     @State private var showPicker = false
     @State private var hint = ""
+    @State private var showAppList = false
+    @State private var importingApp: InstalledApp? = nil
 
     var body: some View {
         PanelShell(title: "逆向分析",
@@ -130,6 +133,55 @@ struct LocalRevView: View {
                         .font(.system(size: 12.5)).foregroundColor(T.accent)
                 }
                 .buttonStyle(.plain)
+
+                Divider().opacity(0.4).padding(.vertical, 4)
+
+                // 已安装 App（对齐 AzTuT 的「逆向分析的目标应用」）
+                Button {
+                    showAppList = true
+                } label: {
+                    HStack {
+                        Label("已安装 App（选目标）", systemImage: "apps.iphone")
+                            .font(.system(size: 12.5)).foregroundColor(T.accent)
+                        Spacer()
+                        Text("\(inv.apps.count)").font(T.mono(10)).foregroundColor(T.txt3)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                if !inv.apps.isEmpty {
+                    ForEach(inv.apps.prefix(6)) { app in
+                        Button {
+                            importingApp = app
+                        } label: {
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(app.name).font(.system(size: 12))
+                                        .foregroundColor(T.txt).lineLimit(1)
+                                    Text(app.bundleId).font(T.mono(8.5))
+                                        .foregroundColor(T.txt3).lineLimit(1)
+                                }
+                                Spacer()
+                                if !app.binaryPath.isEmpty {
+                                    Image(systemName: "doc.badge.plus")
+                                        .font(.system(size: 11)).foregroundColor(T.teal)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 2)
+                    }
+                    if inv.apps.count > 6 {
+                        Text("还有 \(inv.apps.count - 6) 个，展开后可选")
+                            .font(.system(size: 9.5)).foregroundColor(T.txt3)
+                    }
+                }
+
+                if !inv.status.isEmpty {
+                    Text(inv.status).font(T.mono(9)).foregroundColor(T.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 if !hint.isEmpty {
                     Text(hint).font(T.mono(10)).foregroundColor(T.orange)
@@ -237,7 +289,43 @@ struct LocalRevView: View {
                 hint = "选文件失败：\(e.localizedDescription)"
             }
         }
-        .onAppear { eng.probe() }
+        .sheet(isPresented: $showAppList) {
+            AppListSheet { app in
+                importingApp = app
+                showAppList = false
+            }
+        }
+        .onChange(of: importingApp) { app in
+            guard let app = app else { return }
+            importAppIntoGuest(app)
+        }
+        .onAppear {
+            eng.probe()
+            if inv.apps.isEmpty { inv.scanHost() }
+        }
+    }
+
+    /// 把目标 App 主二进制拉进 guest，然后当逆向目标载入
+    private func importAppIntoGuest(_ app: InstalledApp) {
+        guard rt.stage.isReady else {
+            hint = "先到「终端」页把 Linux 启起来，才能拉目标 App 二进制"
+            return
+        }
+        hint = ""
+        Task {
+            guard let guestPath = await inv.importAppBinary(app) else {
+                await MainActor.run {
+                    hint = "读不到 \(app.binaryPath)（本机沙箱非越狱时，需先在终端挂宿主文件系统）"
+                    self.importingApp = nil
+                }
+                return
+            }
+            // 送进 guest 后，按 guest 路径加进逆向目标并直接分析
+            await MainActor.run {
+                self.importingApp = nil
+            }
+            eng.addGuestPath(guestPath)
+        }
     }
 
     private func toolBtn(_ glyph: String, _ label: String, _ action: @escaping () -> Void) -> some View {
@@ -279,6 +367,81 @@ struct LocalRevView: View {
                 Text("先到「终端」页把 Linux 启起来，这里才有东西可跑。")
                     .font(.system(size: 10.5)).foregroundColor(T.orange)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+// MARK: - 已安装 App 选择器
+
+/// 列出本机已安装 App，点选后回调，供逆向分析当作目标。
+struct AppListSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var inv = AppInventory.shared
+
+    let onSelect: (InstalledApp) -> Void
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if inv.apps.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "apps.iphone").font(.system(size: 34))
+                            .foregroundColor(T.txt3)
+                        Text(inv.status.isEmpty ? "还没枚举到 App" : inv.status)
+                            .font(.system(size: 12)).foregroundColor(T.txt2)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            inv.scanHost()
+                        } label: {
+                            Label("重新扫描", systemImage: "arrow.clockwise")
+                                .font(.system(size: 13)).foregroundColor(T.accent)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(24)
+                } else {
+                    List(inv.apps) { app in
+                        Button {
+                            onSelect(app)
+                            dismiss()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(app.name).font(.system(size: 14))
+                                    .foregroundColor(T.txt)
+                                Text(app.bundleId).font(T.mono(9))
+                                    .foregroundColor(T.txt3).lineLimit(1)
+                                if !app.executable.isEmpty {
+                                    Text("可执行文件：\(app.executable)")
+                                        .font(T.mono(9)).foregroundColor(T.teal)
+                                }
+                                if !app.dataContainer.isEmpty {
+                                    Text("数据容器：\(app.dataContainer)")
+                                        .font(T.mono(8.5)).foregroundColor(T.txt3)
+                                        .lineLimit(1).truncationMode(.middle)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .background(Backdrop())
+            .navigationTitle("已安装 App")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        inv.scanHost()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
             }
         }
     }

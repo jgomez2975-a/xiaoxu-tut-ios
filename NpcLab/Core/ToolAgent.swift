@@ -49,7 +49,7 @@ final class ToolAgent: ObservableObject {
               bridge: Bridge?, hub: NodeHub) {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty, !streaming else { return }
-        guard !st.apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
+        guard !st.activeProvider.apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
             err = "还没填 API Key（设置 → 模型）"
             return
         }
@@ -59,7 +59,7 @@ final class ToolAgent: ObservableObject {
         err = nil
         streaming = true
         round = 0
-        st.log("工具", "开始 \(st.model) · 工具循环开")
+        st.log("工具", "开始 \(st.activeProvider.model) · 工具循环开")
 
         task = Task { [weak self] in
             guard let self else { return }
@@ -100,7 +100,7 @@ final class ToolAgent: ObservableObject {
 
     private func loop(_ st: AppSettings, system: String,
                       bridge: Bridge?, hub: NodeHub) async throws -> Outcome {
-        let isAnthropic = st.provider == "anthropic"
+        let isAnthropic = st.activeProvider.isAnthropic
 
         // 工作消息：只在本轮有效。历史里的工具调用不跨轮带，
         // 免得消息数组越长越贵，也免得模型拿旧结果当新答案。
@@ -189,9 +189,10 @@ final class ToolAgent: ObservableObject {
     }
 
     private func endpoint(_ st: AppSettings) throws -> (URL, Bool) {
-        var base = st.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prov = st.activeProvider
+        var base = prov.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         while base.hasSuffix("/") { base.removeLast() }
-        let isA = st.provider == "anthropic"
+        let isA = prov.isAnthropic
         guard let u = URL(string: base + (isA ? "/messages" : "/chat/completions")) else {
             throw BridgeError.badURL
         }
@@ -204,13 +205,13 @@ final class ToolAgent: ObservableObject {
         var req = URLRequest(url: url, timeoutInterval: 240)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(st.apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("Bearer \(st.activeProvider.apiKey)", forHTTPHeaderField: "Authorization")
 
         var msgs: [[String: Any]] = [["role": "system", "content": system]]
         msgs.append(contentsOf: messages)
 
         let payload: [String: Any] = [
-            "model": st.model,
+            "model": st.activeProvider.model,
             "max_tokens": st.maxTokens,
             "temperature": st.temperature,
             "stream": false,
@@ -254,11 +255,11 @@ final class ToolAgent: ObservableObject {
         var req = URLRequest(url: url, timeoutInterval: 240)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(st.apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue(st.activeProvider.apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
         let payload: [String: Any] = [
-            "model": st.model,
+            "model": st.activeProvider.model,
             "max_tokens": st.maxTokens,
             "temperature": st.temperature,
             "system": system,

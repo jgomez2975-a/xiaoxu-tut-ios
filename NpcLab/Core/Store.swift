@@ -125,14 +125,20 @@ final class AppSettings: ObservableObject {
     @Published var tailOn: Bool = true { didSet { save() } }
     @Published var tailText: String = "" { didSet { save() } }
 
-    // ---- 模型 ----
-    @Published var provider: String = "openai" { didSet { save() } }     // openai / anthropic
-    @Published var baseURL: String = "https://api.openai.com/v1" { didSet { save() } }
-    @Published var apiKey: String = "" { didSet { save() } }
-    @Published var model: String = "gpt-4o" { didSet { save() } }
+    // ---- 模型（多服务商实例，对齐 Minis）----
+    @Published var providers: [ProviderInstance] = [ProviderInstance()] { didSet { save() } }
+    @Published var activeProviderId: UUID? = nil { didSet { save() } }
     @Published var temperature: Double = 0.7 { didSet { save() } }
     @Published var maxTokens: Int = 4096 { didSet { save() } }
     @Published var streamOn: Bool = true { didSet { save() } }
+
+    /// 当前启用的服务商实例（用于发请求）。找不到就用第一个启用的，再退第一个。
+    var activeProvider: ProviderInstance {
+        if let id = activeProviderId,
+           let p = providers.first(where: { $0.id == id && $0.isEnabled }) { return p }
+        if let p = providers.first(where: { $0.isEnabled }) { return p }
+        return providers.first ?? ProviderInstance()
+    }
 
     // ---- 节点桥（PC 算力节点）----
     @Published var bridgeOn: Bool = false { didSet { save() } }
@@ -184,6 +190,8 @@ final class AppSettings: ObservableObject {
         var baseURL: String?
         var apiKey: String?
         var model: String?
+        var providers: [ProviderInstance]?
+        var activeProviderId: UUID?
         var temperature: Double?
         var maxTokens: Int?
         var streamOn: Bool?
@@ -214,15 +222,37 @@ final class AppSettings: ObservableObject {
         if let d = UserDefaults.standard.data(forKey: "npclab.cfg"),
            let b = try? JSONDecoder().decode(Blob.self, from: d) {
             apply(b)
+            migrateLegacyProvider(b)
         }
         if persona.isEmpty { persona = AppSettings.defaultPersona() }
         if tailText.isEmpty { tailText = AppSettings.defaultTail() }
+        // 默认实例给个名字，避免设置页显示空标签
+        if providers.count == 1 && providers[0].name.isEmpty {
+            var p = providers[0]
+            p.name = p.providerLabel
+            providers = [p]
+            activeProviderId = p.id
+        }
         suspend = false
         loadLogs()
         if messages.isEmpty {
             messages = [ChatMessage(role: "assistant",
                                     text: "Npc 已上线。人设、\(PackData.shared.skills.count) 条技能索引、\(PackData.shared.tools.count) 项工具链全部在设备本地。\n设置里填模型地址与 Key 就能说话；接上节点后终端 / 逆向 / 抓包才开始有实体。")]
         }
+    }
+
+    /// 旧版是单一 provider（provider/baseURL/apiKey/model），升级到多实例时
+    /// 把旧值搬进第一个实例，避免用户丢配置。
+    private func migrateLegacyProvider(_ b: Blob) {
+        guard providers.isEmpty || (providers.count == 1 && providers[0].apiKey.isEmpty && providers[0].name.isEmpty) else { return }
+        var p = providers.first ?? ProviderInstance()
+        if let v = b.provider { p.providerType = v }
+        if let v = b.baseURL { p.baseURL = v }
+        if let v = b.apiKey { p.apiKey = v }
+        if let v = b.model { p.model = v }
+        if p.name.isEmpty { p.name = p.providerLabel }
+        providers = [p]
+        activeProviderId = p.id
     }
 
     private func apply(_ b: Blob) {
@@ -236,10 +266,8 @@ final class AppSettings: ObservableObject {
         if let v = b.persona { persona = v }
         if let v = b.tailOn { tailOn = v }
         if let v = b.tailText { tailText = v }
-        if let v = b.provider { provider = v }
-        if let v = b.baseURL { baseURL = v }
-        if let v = b.apiKey { apiKey = v }
-        if let v = b.model { model = v }
+        if let v = b.providers { providers = v }
+        if let v = b.activeProviderId { activeProviderId = v }
         if let v = b.temperature { temperature = v }
         if let v = b.maxTokens { maxTokens = v }
         if let v = b.streamOn { streamOn = v }
@@ -271,7 +299,7 @@ final class AppSettings: ObservableObject {
         b.injectOn = injectOn; b.presetId = presetId; b.injectMode = injectMode
         b.prefix = prefix; b.skillMode = skillMode; b.toolMode = toolMode
         b.pinned = pinned; b.persona = persona; b.tailOn = tailOn; b.tailText = tailText
-        b.provider = provider; b.baseURL = baseURL; b.apiKey = apiKey; b.model = model
+        b.providers = providers; b.activeProviderId = activeProviderId
         b.temperature = temperature; b.maxTokens = maxTokens; b.streamOn = streamOn
         b.bridgeOn = bridgeOn; b.bridgeURL = bridgeURL; b.bridgeToken = bridgeToken
         b.faceIDLock = faceIDLock; b.allowFileRead = allowFileRead

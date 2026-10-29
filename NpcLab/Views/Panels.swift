@@ -27,9 +27,9 @@ struct PermPanel: View {
             SectionTitle(text: "本机能力")
             Card {
                 item("人设 / 技能 / 文档", "可用", T.green, "全部内置在 App 沙箱，离网可用")
-                item("对话", st.apiKey.isEmpty ? "缺 Key" : "可用",
-                     st.apiKey.isEmpty ? T.orange : T.green,
-                     st.apiKey.isEmpty ? "设置 → 模型 → API Key" : "\(st.provider) · \(st.model)")
+                item("对话", st.activeProvider.apiKey.isEmpty ? "缺 Key" : "可用",
+                     st.activeProvider.apiKey.isEmpty ? T.orange : T.green,
+                     st.activeProvider.apiKey.isEmpty ? "设置 → 模型 → API Key" : "\(st.activeProvider.providerLabel) · \(st.activeProvider.model)")
                 item("终端 / Linux", LinuxRuntime.shared.stage.isReady ? "运行中" : "未启动",
                      LinuxRuntime.shared.stage.isReady ? T.green : T.orange,
                      "内置 iSH 内核 + Alpine，真 shell，不需要节点")
@@ -85,6 +85,9 @@ struct HostPanel: View {
             Card(padding: 0) {
                 ToggleRow(title: "允许读取", sub: "关闭后所有 /api/host/* 调用直接拒绝",
                           on: $st.allowFileRead)
+                    .onChange(of: st.allowFileRead) { on in
+                        syncEnabled(on)
+                    }
             }
 
             SectionTitle(text: "授权根")
@@ -101,14 +104,18 @@ struct HostPanel: View {
                             .lineLimit(1).truncationMode(.middle)
                         Spacer()
                         Button {
-                            st.hostRoots[i].mode = (st.hostRoots[i].mode == "rw" ? "ro" : "rw")
+                            let m = (st.hostRoots[i].mode == "rw" ? "ro" : "rw")
+                            st.hostRoots[i].mode = m
+                            syncRoot(st.hostRoots[i].path, mode: m)
                         } label: {
                             Pill(text: st.hostRoots[i].mode == "rw" ? "读写" : "只读",
                                  color: st.hostRoots[i].mode == "rw" ? T.orange : T.txt3)
                         }
                         .buttonStyle(.plain)
                         Button {
+                            let p = st.hostRoots[i].path
                             st.hostRoots.remove(at: i)
+                            syncRoot(p, del: true)
                         } label: {
                             Image(systemName: "trash").font(.system(size: 11))
                                 .foregroundColor(T.red.opacity(0.8))
@@ -128,6 +135,7 @@ struct HostPanel: View {
                         guard !p.isEmpty else { return }
                         st.hostRoots.append(HostRoot(path: p, mode: "ro"))
                         newPath = ""
+                        syncRoot(p)
                     } label: {
                         Image(systemName: "plus").font(.system(size: 12, weight: .bold))
                             .foregroundColor(.white)
@@ -181,6 +189,22 @@ struct HostPanel: View {
         .onAppear {
             if st.bridgeOn { hub.refresh(st) }
             if browsePath.isEmpty, let r = st.hostRoots.first { browsePath = r.path }
+        }
+    }
+
+    /// 把授权根同步到节点端 hostfs（add/del），保持两端一致
+    private func syncRoot(_ path: String, mode: String = "ro", del: Bool = false) {
+        guard st.bridgeOn, let b = Bridge(st) else { return }
+        Task {
+            _ = try? await b.hostSetRoot(path: path, mode: mode, del: del)
+        }
+    }
+
+    /// 把「允许读取」开关同步到节点端 hostfs.set_enabled
+    private func syncEnabled(_ on: Bool) {
+        guard st.bridgeOn, let b = Bridge(st) else { return }
+        Task {
+            _ = try? await b.hostEnabled(on)
         }
     }
 

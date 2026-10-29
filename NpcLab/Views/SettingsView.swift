@@ -4,10 +4,8 @@ struct SettingsView: View {
     @EnvironmentObject var st: AppSettings
     @EnvironmentObject var hub: NodeHub
 
-    @State private var editKey = false
-    @State private var editBase = false
-    @State private var editModel = false
     @State private var editNode = false
+    @State private var editingProvider: ProviderInstance? = nil
 
     var body: some View {
         PanelShell(title: "设置", sub: "改动即时落盘；节点在线才谈得上执行") {
@@ -15,46 +13,25 @@ struct SettingsView: View {
             SectionTitle(text: "模型")
             Card(padding: 0) {
                 VStack(spacing: 0) {
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("服务商").font(.system(size: 14.5)).foregroundColor(T.txt)
-                            Text(st.provider == "anthropic" ? "Anthropic Messages API" : "OpenAI 兼容 /chat/completions")
-                                .font(.system(size: 11)).foregroundColor(T.txt3)
+                    // 服务商实例列表（对齐 Minis 多 provider）
+                    ForEach(st.providers.indices, id: \.self) { i in
+                        providerRow(i)
+                        if i < st.providers.count - 1 { RowDivider() }
+                    }
+                    RowDivider()
+                    HStack {
+                        Button {
+                            addProvider()
+                        } label: {
+                            Label("新增服务商", systemImage: "plus.circle")
+                                .font(.system(size: 13)).foregroundColor(T.accent)
                         }
+                        .buttonStyle(.plain)
                         Spacer()
-                        Picker("", selection: $st.provider) {
-                            Text("OpenAI").tag("openai")
-                            Text("Anthropic").tag("anthropic")
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 170)
+                        Text("\(st.providers.count) 个 · 点左侧圆点切换")
+                            .font(.system(size: 10.5)).foregroundColor(T.txt3)
                     }
                     .padding(.horizontal, 12).padding(.vertical, 10)
-
-                    RowDivider()
-                    Button {
-                        editBase = true
-                    } label: {
-                        NavRow(color: T.accent, glyph: "⌁", title: "接口地址",
-                               sub: st.baseURL)
-                    }
-                    .buttonStyle(.plain)
-                    RowDivider()
-                    Button {
-                        editKey = true
-                    } label: {
-                        NavRow(color: T.orange, glyph: "⚿", title: "API Key",
-                               sub: st.apiKey.isEmpty ? "未填" : mask(st.apiKey))
-                    }
-                    .buttonStyle(.plain)
-                    RowDivider()
-                    Button {
-                        editModel = true
-                    } label: {
-                        NavRow(color: T.purple, glyph: "◈", title: "模型",
-                           sub: st.model)
-                    }
-                    .buttonStyle(.plain)
                     RowDivider()
                     HStack {
                         Text("流式").font(.system(size: 14.5)).foregroundColor(T.txt)
@@ -247,20 +224,12 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             .foregroundColor(T.red)
         }
-        .sheet(isPresented: $editKey) {
-            PromptSheet(title: "API Key", hint: "只存在本机 UserDefaults，不上传任何第三方",
-                        placeholder: "sk-…", initial: st.apiKey) { st.apiKey = $0 }
-        }
-        .sheet(isPresented: $editBase) {
-            PromptSheet(title: "接口地址",
-                        hint: st.provider == "anthropic"
-                            ? "例如 https://api.anthropic.com/v1"
-                            : "例如 https://api.openai.com/v1 或自建中转",
-                        placeholder: "https://…/v1", initial: st.baseURL) { st.baseURL = $0 }
-        }
-        .sheet(isPresented: $editModel) {
-            PromptSheet(title: "模型名", hint: "填服务商实际接受的 model 值",
-                        placeholder: "gpt-4o", initial: st.model) { st.model = $0 }
+        .sheet(item: $editingProvider) { p in
+            ProviderEditor(provider: p) { updated in
+                if let idx = st.providers.firstIndex(where: { $0.id == updated.id }) {
+                    st.providers[idx] = updated
+                }
+            }
         }
         .sheet(isPresented: $editNode) {
             PromptSheet(title: "节点地址",
@@ -275,11 +244,150 @@ struct SettingsView: View {
         return String(s.prefix(4)) + "••••" + String(s.suffix(4))
     }
 
+    /// 单个服务商实例行：圆点选启用 / 点整行编辑 / 右滑删除
+    @ViewBuilder
+    private func providerRow(_ i: Int) -> some View {
+        let p = st.providers[i]
+        let active = st.activeProviderId == p.id
+        HStack(spacing: 10) {
+            Button {
+                st.activeProviderId = p.id
+            } label: {
+                Image(systemName: active ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundColor(active ? T.accent : T.txt3)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(p.name.isEmpty ? p.providerLabel : p.name)
+                        .font(.system(size: 14.5)).foregroundColor(T.txt)
+                        .lineLimit(1)
+                    Pill(text: p.providerLabel, color: active ? T.accent : T.txt3)
+                    if active {
+                        Pill(text: "使用中", color: T.green)
+                    }
+                }
+                Text(p.model + " · " + (p.apiKey.isEmpty ? "未填 Key" : "已填 Key"))
+                    .font(.system(size: 11)).foregroundColor(T.txt3)
+                    .lineLimit(1)
+            }
+            Spacer()
+
+            if st.providers.count > 1 {
+                Button {
+                    removeProvider(p)
+                } label: {
+                    Image(systemName: "trash").font(.system(size: 11))
+                        .foregroundColor(T.red.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            editingProvider = p
+        }
+    }
+
+    private func addProvider() {
+        var p = ProviderInstance()
+        p.name = "新服务商 \(st.providers.count + 1)"
+        st.providers.append(p)
+        editingProvider = p
+    }
+
+    private func removeProvider(_ p: ProviderInstance) {
+        st.providers.removeAll { $0.id == p.id }
+        if st.activeProviderId == p.id {
+            st.activeProviderId = st.providers.first?.id
+        }
+    }
+
     private func statLine(_ k: String, _ v: String) -> some View {
         HStack {
             Text(k).font(.system(size: 12)).foregroundColor(T.txt2)
             Spacer()
             Text(v).font(T.mono(11)).foregroundColor(T.txt3)
+        }
+    }
+}
+
+// MARK: - 服务商编辑器
+
+/// 编辑/新建一个服务商实例：服务商类型、名称、baseURL、Key、模型、启用。
+struct ProviderEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var p: ProviderInstance
+    let onSave: (ProviderInstance) -> Void
+
+    init(provider: ProviderInstance, onSave: @escaping (ProviderInstance) -> Void) {
+        _p = State(initialValue: provider)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("服务商") {
+                    Picker("类型", selection: $p.providerType) {
+                        ForEach(ProviderInstance.providerTypes, id: \.self) { t in
+                            Text(ProviderInstance(id: UUID(), providerType: t).providerLabel).tag(t)
+                        }
+                    }
+                    .onChange(of: p.providerType) { t in
+                        // 切类型时，若 baseURL/模型还停在上一家的默认值，换成新家的默认
+                        if p.baseURL == "https://api.openai.com/v1" ||
+                           p.baseURL == "https://api.anthropic.com/v1" ||
+                           p.baseURL == "https://openrouter.ai/api/v1" ||
+                           p.baseURL == "https://api.x.ai/v1" ||
+                           p.baseURL == "https://generativelanguage.googleapis.com/v1beta" ||
+                           p.baseURL == "https://api.kimi.com/coding/v1" {
+                            p.baseURL = ProviderInstance.defaultBaseURL(t)
+                        }
+                        if p.model == "gpt-4o" || p.model == "claude-sonnet-4-5" ||
+                           p.model == "openai/gpt-4o" || p.model == "grok-3" ||
+                           p.model == "gemini-2.5-pro" || p.model == "kimi-k2" {
+                            p.model = ProviderInstance.defaultModel(t)
+                        }
+                    }
+                    TextField("名称（唯一标识）", text: $p.name)
+                        .autocorrectionDisabled()
+                }
+                Section("连接") {
+                    TextField("接口地址", text: $p.baseURL)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    TextField("API Key", text: $p.apiKey)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    TextField("模型", text: $p.model)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                }
+                Section {
+                    Toggle("启用此服务商", isOn: $p.isEnabled)
+                }
+                Section {
+                    Text(p.isAnthropic
+                         ? "Anthropic 走 Messages API（x-api-key + anthropic-version）。"
+                         : "OpenAI 兼容，走 /chat/completions（Bearer Token）。其余服务商（OpenRouter/xAI/Gemini/Kimi）都兼容此协议，改 baseURL 即可。")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle(p.name.isEmpty ? "服务商" : p.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        // 切服务商类型时，若 baseURL/模型还是上一家的默认值，自动换成新家的默认
+                        onSave(p)
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 }
