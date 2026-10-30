@@ -158,18 +158,20 @@ fi
 
 # 4.3 真终端模式下，确认 -force_load 真的把内核拉进可执行文件了。
 #
-# 只查两个「必然外部可见」的符号：
-#   _npc_linux_boot   Swift 侧唯一入口，必须 global
-#   _gadget_load_reg  Asbestos 的汇编 gadget，LTO 不处理汇编符号，一定在
-#
-# 为什么不再查 become_first_process / do_execve / cpu_run_to_interrupt：
-# Release 开了 LTO（-object_path_lto），这些内核内部函数只被 NpcLinux.c 调用，
-# 会被内联成 local 甚至整个消失，nm -g（只看 global）必然查不到 —— 那是优化
-# 的结果，不是没链进去。真正的判据是链接器没报 undefined symbol。
+# 两个细节都踩过：
+#   1) 必须用 nm -g。iOS Release 会 strip 掉静态符号表，不加 -g 时 nm 一个
+#      符号都读不出来（全 ✗，误判成没链进去）。
+#   2) 只查这两个「一定还在」的：
+#        _npc_linux_boot  来自 libNpcLinux.a，Swift 侧唯一入口，必须 global
+#        _mount_root      来自 libish.a，内核挂载入口
+#      不再查 become_first_process / do_execve / cpu_run_to_interrupt ——
+#      它们只被 NpcLinux.c 调用，Release 的 LTO（-object_path_lto）会把它们
+#      内联成 local 甚至整个消掉，nm -g 查不到是优化结果，不是缺符号。
+#      真正的判据是链接器没报 undefined symbol。
 EXE="$APP/$APP_NAME"
 if [ "$KERNEL_MODE" = "real" ]; then
-    NM_ALL="$(nm "$EXE" 2>/dev/null || true)"
-    for sym in _npc_linux_boot _gadget_load_reg; do
+    NM_ALL="$(nm -g "$EXE" 2>/dev/null || true)"
+    for sym in _npc_linux_boot _mount_root; do
         if echo "$NM_ALL" | grep -qE "[TtDdBb] ${sym}$"; then
             echo "    ✓ $sym"
         else
