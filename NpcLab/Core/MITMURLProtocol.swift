@@ -91,7 +91,10 @@ final class MITMInterceptor: ObservableObject {
 /// 实际拦截器。canonicalRequest 里做标记，startLoading 里解密+转发+改写。
 final class MITMURLProtocol: URLProtocol {
 
-    private var task: URLSessionDataTask?
+    // 不能叫 task：URLProtocol 父类有 `open var task: URLSessionTask? { get }`，
+    // Swift 不允许用 stored property 去 override（而且 private 的访问级别也低于
+    // 父类的 open）。我们只是自己存个引用用来 cancel，换个名字最干净。
+    private var dataTask: URLSessionDataTask?
     private var received = Data()
     private var response: URLResponse?
 
@@ -123,17 +126,20 @@ final class MITMURLProtocol: URLProtocol {
         // 改写请求
         let req = Self.applyRequestRules(request, url: url.absoluteString)
 
-        // 标记已处理，防止递归
-        var marked = req
-        URLProtocol.setProperty(true, forKey: Self.handledKey, in: &marked)
+        // 标记已处理，防止递归。
+        // URLProtocol.setProperty 是 ObjC API，只收 NSMutableURLRequest；
+        // URLRequest 是 struct，得先桥成 NSURLRequest 再 mutableCopy 回来。
+        let markedNS = (req as NSURLRequest).mutableCopy() as! NSMutableURLRequest
+        URLProtocol.setProperty(true, forKey: Self.handledKey, in: markedNS)
+        let marked = markedNS as URLRequest
 
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MITMURLProtocol.self] // 后续跳转也走本类
         let delegate = MITMDelegate(owner: self)
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
         self.delegateRef = delegate
-        task = session.dataTask(with: marked)
-        task?.resume()
+        dataTask = session.dataTask(with: marked)
+        dataTask?.resume()
 
         // 记录请求
         var flow = MITMFlow()
@@ -148,7 +154,7 @@ final class MITMURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {
-        task?.cancel()
+        dataTask?.cancel()
     }
 
     private var delegateRef: MITMDelegate?
