@@ -209,16 +209,21 @@ final class ToolAgent: ObservableObject {
         var msgs: [[String: Any]] = [["role": "system", "content": system]]
         msgs.append(contentsOf: messages)
 
-        let payload: [String: Any] = [
+        var p2: [String: Any] = [
             "model": st.activeProvider.model,
             "max_tokens": st.maxTokens,
-            "temperature": st.temperature,
             "stream": false,
             "messages": msgs,
             "tools": Self.openAITools(st),
             "tool_choice": "auto"
         ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        // 推理模型（设了思考程度）不接受 temperature，只发 reasoning_effort
+        if st.activeProvider.reasoningEffort.isEmpty {
+            p2["temperature"] = st.temperature
+        } else {
+            p2["reasoning_effort"] = st.activeProvider.reasoningEffort
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: p2)
 
         let (data, resp) = try await MITMInterceptor.session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw BridgeError.offline }

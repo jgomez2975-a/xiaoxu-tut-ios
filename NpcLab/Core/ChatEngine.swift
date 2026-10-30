@@ -94,9 +94,13 @@ final class ChatEngine: ObservableObject {
         let msgs = trimHistory(st)
         var payload: [String: Any] = [
             "model": prov.model,
-            "temperature": st.temperature,
             "stream": st.streamOn
         ]
+        // 推理模型（设了思考程度）不接受 temperature；普通对话才带。
+        // Anthropic 不受影响，照常带。
+        if isAnthropic || prov.reasoningEffort.isEmpty {
+            payload["temperature"] = st.temperature
+        }
         if isAnthropic {
             payload["max_tokens"] = st.maxTokens
             payload["system"] = system
@@ -106,6 +110,10 @@ final class ChatEngine: ObservableObject {
         } else if isResponses {
             // Responses API：用 input 数组 + max_output_tokens，system 放在 input 第一条
             payload["max_output_tokens"] = st.maxTokens
+            // Responses API 的思考程度是嵌套的 reasoning.effort，跟 chat 的顶层字段不同
+            if !prov.reasoningEffort.isEmpty {
+                payload["reasoning"] = ["effort": prov.reasoningEffort]
+            }
             var input: [[String: Any]] = [["role": "system", "content": system]]
             input.append(contentsOf: msgs.map { m -> [String: Any] in
                 ["role": m.role, "content": Self.content(m, anthropic: false)]
@@ -113,6 +121,10 @@ final class ChatEngine: ObservableObject {
             payload["input"] = input
         } else {
             payload["max_tokens"] = st.maxTokens
+            // 思考程度：OpenAI 推理模型（o 系列 / GPT-5）用顶层 reasoning_effort
+            if !prov.reasoningEffort.isEmpty {
+                payload["reasoning_effort"] = prov.reasoningEffort
+            }
             var arr: [[String: Any]] = [["role": "system", "content": system]]
             arr.append(contentsOf: msgs.map { m -> [String: Any] in
                 ["role": m.role, "content": Self.content(m, anthropic: false)]

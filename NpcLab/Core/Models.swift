@@ -239,6 +239,17 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     }
 }
 
+// MARK: - 会话（多会话，对齐 Minis 的「新建对话」）
+
+/// 一个独立对话。`messages` 是它自己的完整历史；标题由首条用户消息自动生成。
+struct Conversation: Identifiable, Hashable, Codable {
+    var id = UUID()
+    var title: String = "新对话"
+    var createdAt = Date()
+    var updatedAt = Date()
+    var messages: [ChatMessage] = []
+}
+
 // MARK: - 模型服务商（对齐 Minis 的多 Provider 实例）
 
 /// 一个可用的 LLM 服务商实例。Minis 的模型体系是「多 provider 并存」，
@@ -260,11 +271,15 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
     var models: [String] = []
     /// API 格式：OpenAI 专有。chat = /v1/chat/completions；responses = /v1/responses。
     var apiFormat: String = "chat"
+    /// 思考程度（reasoning effort）："" = 自动/默认（不发参数）、low / medium / high。
+    /// 仅 OpenAI 兼容的推理模型（o 系列、GPT-5 等）生效，普通模型会忽略。
+    var reasoningEffort: String = ""
 
     init(id: UUID = UUID(), name: String = "", providerType: String = "openai",
          baseURL: String = "https://api.openai.com", apiKey: String = "",
          model: String = "gpt-4o", isEnabled: Bool = true,
-         appendV1Suffix: Bool = true, models: [String] = [], apiFormat: String = "chat") {
+         appendV1Suffix: Bool = true, models: [String] = [], apiFormat: String = "chat",
+         reasoningEffort: String = "") {
         self.id = id
         self.name = name
         self.providerType = providerType
@@ -275,12 +290,13 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
         self.appendV1Suffix = appendV1Suffix
         self.models = models
         self.apiFormat = apiFormat
+        self.reasoningEffort = reasoningEffort
     }
 
     /// 手写 Codable：appendV1Suffix / models 是后加的字段，老存档里没有，
     /// 交给合成的 Decodable 会因缺 key 整条抛错。这里 decodeIfPresent + 默认值兜底。
     enum CodingKeys: String, CodingKey {
-        case id, name, providerType, baseURL, apiKey, model, isEnabled, appendV1Suffix, models, apiFormat
+        case id, name, providerType, baseURL, apiKey, model, isEnabled, appendV1Suffix, models, apiFormat, reasoningEffort
     }
 
     init(from d: Decoder) throws {
@@ -295,6 +311,7 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
         appendV1Suffix = (try? c.decode(Bool.self, forKey: .appendV1Suffix)) ?? true
         models = (try? c.decode([String].self, forKey: .models)) ?? []
         apiFormat = (try? c.decode(String.self, forKey: .apiFormat)) ?? "chat"
+        reasoningEffort = (try? c.decode(String.self, forKey: .reasoningEffort)) ?? ""
     }
 
     func encode(to e: Encoder) throws {
@@ -309,6 +326,7 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
         try c.encode(appendV1Suffix, forKey: .appendV1Suffix)
         try c.encode(models, forKey: .models)
         try c.encode(apiFormat, forKey: .apiFormat)
+        try c.encode(reasoningEffort, forKey: .reasoningEffort)
     }
 
     /// 协议只有两类：Anthropic Messages API，其余全是 OpenAI 兼容 /chat/completions

@@ -24,12 +24,14 @@ struct ChatView: View {
         case prompt
         case camera
         case image(String)
+        case conversations
 
         var id: String {
             switch self {
             case .prompt: return "prompt"
             case .camera: return "camera"
             case .image(let n): return "img:" + n
+            case .conversations: return "conversations"
             }
         }
     }
@@ -37,6 +39,10 @@ struct ChatView: View {
     /// 当前走哪条路：工具循环 or 纯流式
     private var useTools: Bool { st.toolLoop }
     private var busy: Bool { useTools ? agent.streaming : engine.streaming }
+
+    private var activeConversationTitle: String {
+        st.conversations.first(where: { $0.id == st.activeConversationId })?.title ?? "对话"
+    }
 
     private var injected: PromptBuilder.Parts {
         PromptBuilder.assemble(st, bridge: hub.state)
@@ -50,7 +56,7 @@ struct ChatView: View {
             inputBar
         }
         .background(Backdrop())
-        .navigationTitle("对话")
+        .navigationTitle(activeConversationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
@@ -66,15 +72,28 @@ struct ChatView: View {
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
+                HStack(spacing: 14) {
                     Button {
-                        hub.refresh(st)
-                    } label: { Label("探活节点", systemImage: "antenna.radiowaves.left.and.right") }
-                    Button(role: .destructive) {
-                        st.resetChat()
-                    } label: { Label("清空会话", systemImage: "trash") }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                        st.newConversation()
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .disabled(busy)
+                    Menu {
+                        Button {
+                            sheet = .conversations
+                        } label: { Label("对话列表", systemImage: "list.bullet") }
+                        .disabled(busy)
+                        Button {
+                            hub.refresh(st)
+                        } label: { Label("探活节点", systemImage: "antenna.radiowaves.left.and.right") }
+                        Button(role: .destructive) {
+                            st.resetChat()
+                        } label: { Label("清空会话", systemImage: "trash") }
+                        .disabled(busy)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
                 }
             }
         }
@@ -95,6 +114,8 @@ struct ChatView: View {
                 .ignoresSafeArea()
             case .image(let n):
                 ImageViewer(name: n)
+            case .conversations:
+                ConversationListView()
             }
         }
         .onChange(of: pickItems) { items in
@@ -377,6 +398,95 @@ struct ChatView: View {
             .padding(.horizontal, 8).padding(.vertical, 9)
             .background(T.bg2.opacity(0.85))
         }
+    }
+}
+
+// MARK: - 对话列表
+
+/// 会话列表：点选切换、滑动删除、底部新建。对齐 Minis 的多会话管理。
+struct ConversationListView: View {
+    @EnvironmentObject var st: AppSettings
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if st.conversations.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .font(.system(size: 32)).foregroundColor(T.txt3)
+                        Text("还没有对话").font(.system(size: 13)).foregroundColor(T.txt2)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(st.conversations) { c in
+                            Button {
+                                st.switchConversation(c.id)
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(c.title)
+                                            .font(.system(size: 14.5))
+                                            .foregroundColor(T.txt)
+                                            .lineLimit(1)
+                                        Text("\(c.messages.count) 条 · \(Self.shortDate(c.updatedAt))")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(T.txt3)
+                                    }
+                                    Spacer()
+                                    if c.id == st.activeConversationId {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(T.accent)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                        .onDelete { idx in
+                            for i in idx {
+                                st.deleteConversation(st.conversations[i].id)
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .background(Backdrop())
+            .navigationTitle("对话列表")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    st.newConversation()
+                    dismiss()
+                } label: {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "plus.circle.fill")
+                        Text("新建对话").font(.system(size: 14, weight: .semibold))
+                        Spacer()
+                    }
+                    .padding(.vertical, 12)
+                    .glass(12)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(T.accent)
+                .padding(.horizontal, 14).padding(.bottom, 8)
+                .background(T.bg2.opacity(0.85))
+            }
+        }
+    }
+
+    private static func shortDate(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: d)
     }
 }
 

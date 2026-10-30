@@ -420,6 +420,20 @@ struct ProviderFormFields: View {
                 }
             }
 
+            // 4.5 思考程度（reasoning effort，OpenAI 兼容协议）
+            if !isVoice && p.providerType != "anthropic" && p.providerType != "gemini" {
+                Section {
+                    Picker("思考程度", selection: $p.reasoningEffort) {
+                        Text("自动（默认）").tag("")
+                        Text("低").tag("low")
+                        Text("中").tag("medium")
+                        Text("高").tag("high")
+                    }
+                } footer: {
+                    Text("仅对支持推理的模型（o 系列、GPT-5、DeepSeek-R1 等）生效，普通模型会忽略。设置得越高，思考越久、消耗越多 token。")
+                }
+            }
+
             // 5. 模型分区（编辑详情页）
             if showModels {
                 modelSection

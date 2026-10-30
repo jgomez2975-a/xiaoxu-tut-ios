@@ -198,7 +198,12 @@ final class AppSettings: ObservableObject {
     @Published var revFileDb: Bool = true { didSet { save() } }    // file / sqlite3
 
     // ---- 会话 ----
+    /// 当前激活会话的消息（内存镜像，落盘时同步进 conversations）。
+    /// 所有旧引用（ChatEngine / ToolAgent / 视图）继续走它，行为不变。
     @Published var messages: [ChatMessage] = [] { didSet { save() } }
+    /// 全部会话。messages 只是激活会话的镜像，真正的历史在这里。
+    @Published var conversations: [Conversation] = []
+    @Published var activeConversationId: UUID? = nil
     @Published var logs: [LogItem] = [] { didSet { save() } }
 
     private var suspend = false
@@ -247,6 +252,8 @@ final class AppSettings: ObservableObject {
         var proxyRules: [ProxyRule]?
         var revEngine: String?
         var messages: [ChatMessage]?
+        var conversations: [Conversation]?
+        var activeConversationId: UUID?
     }
 
     init() {
@@ -264,6 +271,23 @@ final class AppSettings: ObservableObject {
             p.name = p.providerLabel
             providers = [p]
             activeProviderId = p.id
+        }
+        // 会话迁移：老版本只有一个 messages 数组，包进第一个会话；
+        // 新版本则从激活会话把消息还原进内存镜像。
+        if conversations.isEmpty {
+            var c = Conversation()
+            c.messages = messages
+            conversations = [c]
+        }
+        if activeConversationId == nil
+            || !conversations.contains(where: { $0.id == activeConversationId }) {
+            activeConversationId = conversations.first?.id
+        }
+        if let id = activeConversationId,
+           let c = conversations.first(where: { $0.id == id }) {
+            messages = c.messages
+        } else {
+            messages = []
         }
         suspend = false
         loadLogs()
@@ -327,10 +351,13 @@ final class AppSettings: ObservableObject {
         if let v = b.proxyRules { proxyRules = v }
         if let v = b.revEngine { revEngine = v }
         if let v = b.messages { messages = v }
+        if let v = b.conversations { conversations = v }
+        if let v = b.activeConversationId { activeConversationId = v }
     }
 
     func save() {
         guard !suspend else { return }
+        syncMessagesIntoActiveConversation()
         var b = Blob()
         b.injectOn = injectOn; b.presetId = presetId; b.injectMode = injectMode
         b.prefix = prefix; b.skillMode = skillMode; b.toolMode = toolMode
@@ -346,11 +373,27 @@ final class AppSettings: ObservableObject {
         b.execTimeout = execTimeout; b.ghToken = ghToken; b.ghRepo = ghRepo
         b.ctxLimit = ctxLimit; b.autoCompact = autoCompact; b.toolLoop = toolLoop
         b.revTargets = revTargets; b.proxyRules = proxyRules; b.revEngine = revEngine
+        b.conversations = conversations
+        b.activeConversationId = activeConversationId
         b.messages = Array(messages.suffix(200))
         if let d = try? JSONEncoder().encode(b) {
             UserDefaults.standard.set(d, forKey: "npclab.cfg")
         }
         saveLogs()
+    }
+
+    /// 把当前激活会话的消息镜像写回 conversations（截断到最近 500 条）。
+    /// 顺带用首条用户消息给「新对话」起标题。
+    private func syncMessagesIntoActiveConversation() {
+        guard let id = activeConversationId,
+              let i = conversations.firstIndex(where: { $0.id == id }) else { return }
+        conversations[i].messages = Array(messages.suffix(500))
+        conversations[i].updatedAt = Date()
+        if conversations[i].title == "新对话",
+           let first = messages.first(where: { $0.role == "user" }) {
+            let t = first.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { conversations[i].title = String(t.prefix(24)) }
+        }
     }
 
     private func saveLogs() {
@@ -405,6 +448,41 @@ final class AppSettings: ObservableObject {
     func resetChat() {
         messages = []
         save()
+    }
+
+    /// 新建一个空会话并切过去。当前会话已在 save() 里同步，直接开新即可。
+    func newConversation() {
+        let c = Conversation()
+        conversations.insert(c, at: 0)
+        activeConversationId = c.id
+        messages = []
+        save()
+        log("会话", "新建会话")
+    }
+
+    /// 切换到某个会话：先把当前消息写回，再把目标历史装进镜像。
+    func switchConversation(_ id: UUID) {
+        guard let c = conversations.first(where: { $0.id == id }) else { return }
+        activeConversationId = id
+        messages = c.messages
+        save()
+    }
+
+    /// 删除会话。删的是激活会话就切到最近一个；永远保证至少留一个会话。
+    func deleteConversation(_ id: UUID) {
+        conversations.removeAll { $0.id == id }
+        if conversations.isEmpty {
+            let c = Conversation()
+            conversations = [c]
+            activeConversationId = c.id
+            messages = []
+        } else if activeConversationId == id {
+            let c = conversations[0]
+            activeConversationId = c.id
+            messages = c.messages
+        }
+        save()
+        log("会话", "删除会话")
     }
 
     // 默认人设/尾注从 bundle 读，读不到用内嵌备份
