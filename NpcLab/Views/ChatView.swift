@@ -366,6 +366,19 @@ struct ChatView: View {
                     } else {
                         let t = draft
                         let imgs = pendingImages
+
+                        // 技能清单查询：纯本地秒回，不调模型、不查 Key。
+                        // 走工具循环时小模型容易对「你会什么技能」反复调 search_skills
+                        // 不收敛，这里直接本地答，稳且省 token。
+                        if let ans = SkillList.answerIfAsked(t) {
+                            draft = ""
+                            pendingImages = []
+                            st.messages.append(ChatMessage(role: "user", text: t, images: imgs))
+                            st.messages.append(ChatMessage(role: "assistant", text: ans))
+                            st.save()
+                            return
+                        }
+
                         // 没 Key 就别把图吃掉——发不出去还留在输入区
                         guard !st.activeProvider.apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
                             engine.err = "还没填 API Key（设置 → 模型）"

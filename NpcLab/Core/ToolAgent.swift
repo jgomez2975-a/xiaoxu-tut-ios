@@ -109,6 +109,7 @@ final class ToolAgent: ObservableObject {
             .map { ["role": $0.role, "content": $0.text] }
 
         var lastText = ""
+        var lastTool = ""
 
         for i in 0..<Self.maxRounds {
             try Task.checkCancellation()
@@ -145,6 +146,7 @@ final class ToolAgent: ObservableObject {
                 try Task.checkCancellation()
                 await MainActor.run { self.current = c.name }
                 let result = await Self.execute(c, st: st, bridge: bridge)
+                lastTool = result
 
                 if isAnthropic {
                     work.append(["role": "user", "content": [[
@@ -161,9 +163,16 @@ final class ToolAgent: ObservableObject {
             await MainActor.run { self.current = nil }
         }
 
-        // 跑满轮数还没收敛：把最后拿到的文字交出去，并说明情况
+        // 跑满轮数还没收敛：优先交最后的文字；没文字就把最后一轮工具结果
+        // 原样贴出来（比干巴巴的「没有拿到结果」有用），并说明情况
         let note = "\n\n（工具往返已达 \(Self.maxRounds) 轮上限，先给你这些。要接着来就再发一句。）"
-        return Outcome(text: (lastText.isEmpty ? "（没有拿到结果）" : lastText) + note)
+        var body = lastText
+        if body.isEmpty {
+            body = lastTool.isEmpty
+                ? "（没有拿到结果）"
+                : "（工具返回了结果但没整理成话，先原样贴给你）\n" + Self.clip(lastTool, 3000)
+        }
+        return Outcome(text: body + note)
     }
 
     // MARK: 协议 —— OpenAI
