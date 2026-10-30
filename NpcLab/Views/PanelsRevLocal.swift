@@ -9,10 +9,108 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 入口：本机 / 节点 两种模式共用一个页面。
-/// 对齐 AzTuT：默认走 PC 节点（节点端 rev.py 跑 radare2 6.2.4 + r2ghidra，
-/// 伪代码是 ghidra 级的）；本机 radare2 只是节点连不上时的降级。
+/// 入口：设置 → 逆向分析。
+///
+/// 布局对齐 AzTuT 的「逆向分析」设置页：四个区块（目标应用 / 深度分析 /
+/// 辅助工具 / 工具链状态），每个区块下面跟一段灰色说明文字。
+///
+/// 跟 AzTuT 的唯一差别：它的「目标 App 管理」点进去就是任务列表，我们这里
+/// 还要再区分「解析跑在 PC 节点还是本机」——小徐TuT 有节点模式，不能因为套了
+/// 层 UI 就丢掉。那一层放在 RevWorkspace 里。
 struct RevPanel: View {
+    @EnvironmentObject var st: AppSettings
+    @ObservedObject private var eng = RevLocal.shared
+    @ObservedObject private var inv = AppInventory.shared
+
+    var body: some View {
+        PanelShell(title: "逆向分析") {
+
+            // ===== 目标应用 =====
+            SectionTitle(text: "目标应用")
+            Card(padding: 0) {
+                VStack(spacing: 0) {
+                    NavigationLink { RevWorkspace() } label: {
+                        NavRow(color: T.accent, symbol: "square.grid.2x2",
+                               title: "目标 App 管理")
+                    }.buttonStyle(.plain)
+
+                    RowDivider()
+
+                    NavigationLink { LogsPanel() } label: {
+                        NavRow(color: T.teal, symbol: "doc.text.magnifyingglass",
+                               title: "动态注入日志")
+                    }.buttonStyle(.plain)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            SectionFootnote(text: "枚举本机已安装的 App，查看 Bundle 与数据容器，把主二进制或任意文件复制到沙盒，交给 AI 用 strings / radare2 做静态分析。")
+
+            // ===== 深度分析 =====
+            SectionTitle(text: "深度分析")
+            Card(padding: 0) {
+                VStack(spacing: 0) {
+                    IconToggleRow(color: T.accent, glyph: "r2", title: "radare2 反汇编",
+                                  sub: "函数识别、交叉调用、字符串提取（AI 可调用 r2_execute）",
+                                  on: $st.revR2)
+                    RowDivider()
+                    IconToggleRow(color: T.purple, glyph: "gh", title: "r2ghidra 伪代码",
+                                  sub: "输出函数级 C 伪代码，读懂逻辑最快的方式",
+                                  on: $st.revGhidra)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            SectionFootnote(text: "开启后 AI 获得 r2_execute 工具：可对二进制做函数识别、交叉引用与字符串提取。r2ghidra 插件还能输出函数级 C 伪代码。关闭时 AI 只用 App 原生的 strings / hexdump 做轻量分析，零开销。")
+
+            // ===== 辅助工具 =====
+            SectionTitle(text: "辅助工具")
+            Card(padding: 0) {
+                VStack(spacing: 0) {
+                    IconToggleRow(color: T.orange, glyph: "cs", title: "capstone 指令引擎",
+                                  sub: "脚本内做指令级反汇编解析",
+                                  on: $st.revCapstone)
+                    RowDivider()
+                    IconToggleRow(color: T.teal, symbol: "snowflake", title: "binutils 工具集",
+                                  sub: "nm / objdump / readelf / strings 符号与结构",
+                                  on: $st.revBinutils)
+                    RowDivider()
+                    IconToggleRow(color: Color(red: 0.35, green: 0.62, blue: 0.95),
+                                  symbol: "cylinder.split.1x2",
+                                  title: "文件与数据库识别",
+                                  sub: "file 类型识别、sqlite3 读目标 App 数据库",
+                                  on: $st.revFileDb)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            SectionFootnote(text: "工具链已内置在 App 中，离线可用，切换开关即即时生效，无需联网或安装。")
+
+            // ===== 工具链状态 =====
+            SectionTitle(text: "工具链状态")
+            Card(padding: 0) {
+                Button { eng.probe() } label: {
+                    NavRow(color: T.teal, symbol: "checkmark.shield",
+                           title: "检测已内置工具",
+                           sub: statusLine)
+                }.buttonStyle(.plain)
+            }
+            SectionFootnote(text: "radare2、capstone、binutils、file、sqlite3 与 r2ghidra 均随 App 内置，无需安装。此按钮做一次只读探测，用于确认版本是否正确。")
+        }
+        .onAppear {
+            if inv.apps.isEmpty { inv.scanHost() }
+        }
+    }
+
+    /// 「检测已内置工具」那行的副标题：探测中 / 已就绪带版本 / 未启动原因
+    private var statusLine: String {
+        if eng.busy { return eng.status.isEmpty ? "探测中…" : eng.status }
+        if eng.r2Ready { return eng.r2Version.isEmpty ? "已就绪" : eng.r2Version }
+        if !eng.r2Version.isEmpty { return eng.r2Version }
+        return "点一下确认 radare2 / r2ghidra 版本"
+    }
+}
+
+/// 分析工作区：先选解析跑在哪（PC 节点 / 本机 radare2），再进对应的任务列表。
+/// 这一层是原来的 RevPanel 主体，只是去掉了自己的导航壳（外面已经有一层）。
+struct RevWorkspace: View {
     @EnvironmentObject var st: AppSettings
     @EnvironmentObject var hub: NodeHub
     @State private var local = false

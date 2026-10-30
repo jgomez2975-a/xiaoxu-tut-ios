@@ -169,6 +169,15 @@ final class AppSettings: ObservableObject {
     @Published var proxyRules: [ProxyRule] = [] { didSet { save() } }
     @Published var revEngine: String = "pdg" { didSet { save() } }       // pdg / pdd / pdc
 
+    // 逆向工具开关（对齐 AzTuT 的「深度分析 / 辅助工具」）。
+    // 这些不是纯 UI 装饰：ToolAgent 按开关决定要不要把对应的本机工具暴露给 AI。
+    // 默认全开 —— 小徐TuT 改造前这些按钮就是直接可用的，不能因为套了个 UI 就退化。
+    @Published var revR2: Bool = true { didSet { save() } }        // radare2 反汇编（r2_execute）
+    @Published var revGhidra: Bool = true { didSet { save() } }    // r2ghidra 伪代码（pdg）
+    @Published var revCapstone: Bool = false { didSet { save() } } // capstone 指令级反汇编
+    @Published var revBinutils: Bool = true { didSet { save() } }  // nm/objdump/readelf/strings
+    @Published var revFileDb: Bool = true { didSet { save() } }    // file / sqlite3
+
     // ---- 会话 ----
     @Published var messages: [ChatMessage] = [] { didSet { save() } }
     @Published var logs: [LogItem] = [] { didSet { save() } }

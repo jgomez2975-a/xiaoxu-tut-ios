@@ -216,7 +216,7 @@ final class ToolAgent: ObservableObject {
             "temperature": st.temperature,
             "stream": false,
             "messages": msgs,
-            "tools": Self.openAITools,
+            "tools": Self.openAITools(st),
             "tool_choice": "auto"
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -264,7 +264,7 @@ final class ToolAgent: ObservableObject {
             "temperature": st.temperature,
             "system": system,
             "messages": messages,
-            "tools": Self.anthropicTools
+            "tools": Self.anthropicTools(st)
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
@@ -303,7 +303,15 @@ final class ToolAgent: ObservableObject {
         ["type": "object", "properties": props, "required": required]
     }
 
-    private static let defs: [(name: String, desc: String, params: [String: Any], req: [String])] = [
+    private typealias ToolDef = (name: String, desc: String, params: [String: Any], req: [String])
+
+    /// 工具清单。
+    ///
+    /// 本机逆向那几个是按设置里的开关**动态**加入的：关掉的工具不出现在
+    /// tools 数组里，AI 根本看不到，也就不会去调 —— 这才是「关闭时零开销」
+    /// 的真正含义，而不是让 AI 调了再返回一句「未开启」。
+    private static func defs(_ st: AppSettings) -> [ToolDef] {
+        var out: [ToolDef] = [
         ("read_skill",
          "读某条技能的完整 SKILL.md 正文。参数是技能 id（形如 NPC-EDR-Atlas-0001）。本机执行，无需节点。",
          ["id": ["type": "string", "description": "技能 id"]], ["id"]),
@@ -344,18 +352,74 @@ final class ToolAgent: ObservableObject {
                  "bodyReplace": ["type": "string", "description": "正文替换（可选）"],
                  "setHeader": ["type": "string", "description": "要设置的请求头，形如 Key: Value（可选）"]],
          ["url", "phase"])
-    ]
+        ]
 
-    private static var openAITools: [[String: Any]] {
-        defs.map { d in
+        // ================= 本机逆向（App 内置 Alpine，不需要节点）=================
+        //
+        // 对齐 AzTuT 的 r2_execute / binutils_query / file_query / capstone。
+        // target 一律传 guest 路径（/root/npc/xxx 或 /usr/bin/xxx）。
+
+        // 列目标本身无害，总是给
+        out.append(("rev_local_targets",
+         "列出本机 Alpine 里已加载的逆向目标。返回每个目标的 guest 路径 / 架构 / 大小。后续所有 rev_local_* 工具都用这里的 path 当 target 参数。",
+         [:], []))
+
+        if st.revR2 {
+            out.append(("r2_execute",
+             "在本机 radare2 上执行一条 r2 命令。用于函数识别（afl / afij）、交叉引用（axt）、字符串（izz / izz~http）、反汇编（pdf）。例：cmd=\"afl\"、cmd=\"izz~passwd\"、cmd=\"axt @ 0x100003f20\"。",
+             ["cmd": ["type": "string", "description": "r2 内部命令，不要带 radare2 前缀"],
+                     "target": ["type": "string", "description": "目标 guest 路径"],
+                     "timeout": ["type": "integer", "description": "超时秒数，默认 120"]],
+             ["cmd", "target"]))
+        }
+
+        if st.revGhidra {
+            out.append(("ghidra_pseudo",
+             "输出函数级 C 伪代码（r2ghidra 的 pdgj，失败自动降级 pdc → pdf）。off 可以是函数名或 0x 开头的地址，留空默认 main。",
+             ["target": ["type": "string", "description": "目标 guest 路径"],
+                     "off": ["type": "string", "description": "函数名或十六进制地址，可空（默认 main）"]],
+             ["target"]))
+        }
+
+        if st.revBinutils {
+            out.append(("binutils_query",
+             "用 binutils 查目标结构。tool 取值：headers（Mach-O 头/段）、deps（依赖库）、objc（ObjC 类列表）、symbols（符号表）、strings（字符串）、sections（节表）。Mach-O 走 llvm-otool，ELF 走 readelf/objdump。",
+             ["tool": ["type": "string", "description": "headers / deps / objc / symbols / strings / sections"],
+                     "target": ["type": "string", "description": "目标 guest 路径"]],
+             ["tool", "target"]))
+        }
+
+        if st.revFileDb {
+            out.append(("file_query",
+             "识别文件真实类型（file -b）；传了 sql 则改用 sqlite3 查询这个库。用于探索目标 App 数据容器里的数据库，例如 sql=\".tables\" 或 sql=\"select * from Z_METADATA\"。",
+             ["target": ["type": "string", "description": "目标 guest 路径（文件或 .sqlite/.db）"],
+                     "sql": ["type": "string", "description": "SQL 语句，留空则只做 file 识别"]],
+             ["target"]))
+        }
+
+        if st.revCapstone {
+            out.append(("capstone_disasm",
+             "用 capstone 做指令级反汇编。arch 支持 arm64 / arm / x86 / x86_64，offset 是字节偏移，count 是条数上限（默认 64）。",
+             ["target": ["type": "string", "description": "目标 guest 路径"],
+                     "arch": ["type": "string", "description": "arm64 / arm / x86 / x86_64"],
+                     "offset": ["type": "integer", "description": "起始字节偏移，默认 0"],
+                     "count": ["type": "integer", "description": "反汇编多少条，默认 64"]],
+             ["target"]))
+        }
+
+        return out
+    }
+
+    private static func openAITools(_ st: AppSettings) -> [[String: Any]] {
+        defs(st).map { d in
             ["type": "function",
              "function": ["name": d.name, "description": d.desc,
                           "parameters": schema(d.params, required: d.req)]]
         }
     }
 
-    private static var anthropicTools: [[String: Any]] {
-        defs.map { d in
+    private static func anthropicTools(_ st: AppSettings) -> [[String: Any]] {
+        defs(st).map { d in
             ["name": d.name, "description": d.desc, "input_schema": schema(d.params, required: d.req)]
         }
     }
@@ -495,6 +559,49 @@ final class ToolAgent: ObservableObject {
             } catch {
                 return "加规则失败：\(error.localizedDescription)"
             }
+
+        // ---- 本机逆向（跑在 App 内置 Alpine 里，不需要节点）----
+        //
+        // 开关在「设置 → 逆向分析」里控制。这里再兜一次底：万一设置刚被关掉、
+        // 而这一轮对话的 tools 还是上一轮拿的，也要挡住，不能绕过开关。
+
+        case "rev_local_targets":
+            return await RevLocal.shared.aiTargetsText()
+
+        case "r2_execute":
+            guard st.revR2 else { return "「r2 反汇编」已在设置里关闭。到「设置 → 逆向分析 → 深度分析」打开再用。" }
+            let cmd = (a["cmd"] as? String) ?? ""
+            guard !cmd.isEmpty else { return "错误：cmd 为空。示例：afl / izz / pdf @ main / axt @ 0x1000" }
+            let target = (a["target"] as? String) ?? ""
+            let to = Double((a["timeout"] as? Int) ?? 120)
+            return await RevLocal.shared.aiR2(cmd: cmd, target: target, timeout: to)
+
+        case "ghidra_pseudo":
+            guard st.revGhidra else { return "「r2ghidra 伪代码」已在设置里关闭。到「设置 → 逆向分析 → 深度分析」打开再用。" }
+            let target = (a["target"] as? String) ?? ""
+            let off = (a["off"] as? String) ?? ""
+            return await RevLocal.shared.aiPseudo(target: target, off: off)
+
+        case "binutils_query":
+            guard st.revBinutils else { return "「binutils 工具集」已在设置里关闭。" }
+            let tool = (a["tool"] as? String) ?? "headers"
+            let target = (a["target"] as? String) ?? ""
+            return await RevLocal.shared.aiBinutils(tool: tool, target: target)
+
+        case "file_query":
+            guard st.revFileDb else { return "「文件与数据库识别」已在设置里关闭。" }
+            let target = (a["target"] as? String) ?? ""
+            let sql = (a["sql"] as? String) ?? ""
+            return await RevLocal.shared.aiFileDb(target: target, sql: sql)
+
+        case "capstone_disasm":
+            guard st.revCapstone else { return "「capstone 指令引擎」已在设置里关闭。" }
+            let target = (a["target"] as? String) ?? ""
+            let arch = (a["arch"] as? String) ?? "arm64"
+            let off = (a["offset"] as? Int) ?? 0
+            let cnt = (a["count"] as? Int) ?? 64
+            return await RevLocal.shared.aiCapstone(target: target, arch: arch,
+                                                    offset: off, count: cnt)
 
         default:
             return "未知工具：\(c.name)"

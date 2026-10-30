@@ -35,6 +35,8 @@ struct Card<Content: View>: View {
 struct NavRow: View {
     var color: Color = T.accent
     var glyph: String = "•"
+    /// 给了 symbol 就画 SF Symbol，否则画 glyph 文字（老调用处不用改）
+    var symbol: String = ""
     var title: String
     var sub: String = ""
     var value: String = ""
@@ -44,7 +46,12 @@ struct NavRow: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(color.opacity(0.9))
-                Text(glyph).font(.system(size: 13, weight: .bold)).foregroundColor(.white)
+                if symbol.isEmpty {
+                    Text(glyph).font(.system(size: 13, weight: .bold)).foregroundColor(.white)
+                } else {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13, weight: .semibold)).foregroundColor(.white)
+                }
             }
             .frame(width: 27, height: 27)
 
@@ -64,6 +71,58 @@ struct NavRow: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .contentShape(Rectangle())
+    }
+}
+
+/// 圆形图标 + 标题 + 副标题 + 右侧开关。
+/// 对齐 AzTuT「深度分析 / 辅助工具」那种行：图标是圆形色块，跟上面的导航行
+/// （圆角方块）在视觉上区分开。
+struct IconToggleRow: View {
+    var color: Color
+    var glyph: String = ""
+    var symbol: String = ""
+    var title: String
+    var sub: String = ""
+    @Binding var on: Bool
+
+    var body: some View {
+        HStack(spacing: 11) {
+            ZStack {
+                Circle().fill(color.opacity(0.9))
+                if symbol.isEmpty {
+                    Text(glyph).font(.system(size: 12, weight: .bold)).foregroundColor(.white)
+                } else {
+                    Image(systemName: symbol)
+                        .font(.system(size: 12, weight: .semibold)).foregroundColor(.white)
+                }
+            }
+            .frame(width: 27, height: 27)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 14.5)).foregroundColor(T.txt)
+                if !sub.isEmpty {
+                    Text(sub).font(.system(size: 11.5)).foregroundColor(T.txt3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            Spacer(minLength: 6)
+            Toggle("", isOn: $on).labelsHidden().tint(T.accent)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+}
+
+/// 区块下方的灰色说明文字（AzTuT 每个区块下面都有一段）
+struct SectionFootnote: View {
+    var text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundColor(T.txt3)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 4)
+            .padding(.top, -6)
     }
 }
 

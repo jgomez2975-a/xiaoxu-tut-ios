@@ -480,6 +480,156 @@ final class RevLocal: ObservableObject {
         }
     }
 
+    // MARK: - 给 AI 用的接口（ToolAgent 调）
+    //
+    // 上面那些 func 是「点了按钮 → 改 @Published → UI 显示」的交互式流程，
+    // AI 拿不到结果。这里另开一组 async -> String 的：跑命令、直接返回文本，
+    // 不碰 busy/status/pseudo，避免 AI 调用把界面搅乱。
+    //
+    // 输出统一截断到 8KB —— 伪代码和符号表动辄几十万字符，全塞进上下文会
+    // 直接把 token 打爆。
+
+    private static let aiMaxChars = 8000
+
+    private func aiClip(_ s: String) -> String {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.count <= Self.aiMaxChars { return t.isEmpty ? "（没有输出）" : t }
+        return String(t.prefix(Self.aiMaxChars)) + "\n…（已截断，原长 \(t.count) 字符）"
+    }
+
+    /// 本机目标清单（AI 用 rev_local_targets 拿路径，后续工具都按路径传参）
+    @MainActor
+    func aiTargetsText() -> String {
+        guard rt.stage.isReady else { return "本机 Linux 未启动：先到「终端」页把 Alpine 起起来。" }
+        if targets.isEmpty {
+            return "还没有加载任何目标。可以让用户在「逆向 → 目标 App 管理」里选一个 App，或直接用 guest 里的路径（例如 /usr/bin/python3.12）。"
+        }
+        var lines = ["已加载 \(targets.count) 个目标："]
+        for t in targets {
+            var seg = ["path=\(t.path)"]
+            if !t.arch.isEmpty { seg.append("arch=\(t.arch)") }
+            if !t.size.isEmpty { seg.append("size=\(t.size)") }
+            if !t.kind.isEmpty { seg.append("kind=\(t.kind)") }
+            lines.append("  " + seg.joined(separator: "  "))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 在本机 radare2 上跑任意 r2 命令（对齐 AzTuT 的 r2_execute）。
+    /// cmd 是 r2 内部命令，例如 `afl` / `pdf @ main` / `izz~http` / `axt @ 0x1234`。
+    @MainActor
+    func aiR2(cmd: String, target: String, timeout: Double = 120) async -> String {
+        guard rt.stage.isReady else { return "本机 Linux 未启动，radare2 跑不了。" }
+        let p = target.isEmpty ? (current?.path ?? "") : target
+        guard !p.isEmpty else { return "缺少 target 参数：先用 rev_local_targets 拿一个路径，或让用户在逆向页选目标。" }
+
+        // r2 命令里单引号会截断我们的 shell 引号，统一转义掉
+        let safe = cmd.replacingOccurrences(of: "'", with: "'\\''")
+        let full = "radare2 -q -e scr.color=0 -e bin.cache=true "
+            + "-c '\(safe)' -c 'q' -- '\(esc(p))' 2>&1"
+        let r = await rt.exec(full, timeout: timeout)
+        return aiClip(r.out)
+    }
+
+    /// binutils（对齐 AzTuT 的 binutils_query）
+    @MainActor
+    func aiBinutils(tool: String, target: String) async -> String {
+        guard rt.stage.isReady else { return "本机 Linux 未启动，binutils 跑不了。" }
+        guard !target.isEmpty else { return "缺少 target 参数。" }
+
+        let cmd: String
+        switch tool {
+        case "headers":  cmd = "(llvm-otool -h -l '\(esc(target))' 2>/dev/null || readelf -h -l '\(esc(target))' 2>/dev/null) | head -300"
+        case "deps":     cmd = "(llvm-otool -L '\(esc(target))' 2>/dev/null || readelf -d '\(esc(target))' 2>/dev/null) | head -300"
+        case "objc":     cmd = "llvm-otool -o '\(esc(target))' 2>/dev/null | head -300"
+        case "symbols":  cmd = "(llvm-nm '\(esc(target))' 2>/dev/null || nm '\(esc(target))' 2>/dev/null) | head -400"
+        case "strings":  cmd = "strings -a '\(esc(target))' 2>/dev/null | head -500"
+        case "sections": cmd = "(llvm-otool -l '\(esc(target))' 2>/dev/null | grep -A2 -i sectname || readelf -S '\(esc(target))' 2>/dev/null) | head -300"
+        default:         cmd = "(llvm-otool -\(tool) '\(esc(target))' 2>/dev/null || readelf -\(tool) '\(esc(target))' 2>/dev/null) | head -300"
+        }
+        let r = await rt.exec(cmd, timeout: 90)
+        var out = aiClip(r.out)
+        if out.contains("（没有输出）") {
+            out = "tool=\(tool) 没有输出。可能：这个文件不是 Mach-O/ELF，或 rootfs 里缺 llvm/readelf。"
+        }
+        return out
+    }
+
+    /// file 类型识别 + sqlite3 读库（对齐 AzTuT 的 file_query）
+    @MainActor
+    func aiFileDb(target: String, sql: String) async -> String {
+        guard rt.stage.isReady else { return "本机 Linux 未启动，file/sqlite3 跑不了。" }
+        guard !target.isEmpty else { return "缺少 target 参数。" }
+
+        let cmd: String
+        if sql.isEmpty {
+            cmd = "file -b '\(esc(target))' 2>&1"
+        } else {
+            cmd = "sqlite3 -header -column '\(esc(target))' \(shellQuote(sql)) 2>&1"
+        }
+        let r = await rt.exec(cmd, timeout: 60)
+        return aiClip(r.out)
+    }
+
+    /// capstone 指令级反汇编（对齐 AzTuT 的 capstone 工具）
+    @MainActor
+    func aiCapstone(target: String, arch: String, offset: Int, count: Int) async -> String {
+        guard rt.stage.isReady else { return "本机 Linux 未启动，capstone 跑不了。" }
+        guard !target.isEmpty else { return "缺少 target 参数。" }
+
+        let csArch: String
+        let csMode: String
+        switch arch.lowercased() {
+        case "arm64", "aarch64": csArch = "CS_ARCH_ARM64"; csMode = "CS_MODE_ARM"
+        case "arm":              csArch = "CS_ARCH_ARM";   csMode = "CS_MODE_ARM"
+        case "x86_64", "x86-64": csArch = "CS_ARCH_X86";   csMode = "CS_MODE_64"
+        default:                 csArch = "CS_ARCH_X86";   csMode = "CS_MODE_32"
+        }
+        let n = max(1, min(count, 400))
+        let py = """
+        import capstone, sys
+        from capstone import *
+        try:
+            d = open('\(esc(target))','rb').read()
+        except Exception as e:
+            print('open error:', e); sys.exit(1)
+        off = \(max(offset, 0))
+        if off >= len(d):
+            print('offset 越界，文件只有 %d 字节' % len(d)); sys.exit(1)
+        md = Cs(\(csArch), \(csMode))
+        md.detail = True
+        n = 0
+        for ins in md.disasm(d[off:off+\(n * 8)], off):
+            print('0x%x:\\t%s\\t%s' % (ins.address, ins.mnemonic, ins.op_str))
+            n += 1
+            if n >= \(n): break
+        if n == 0:
+            print('这个偏移上没有解出指令；可能架构选错了（试试 arch=x86 / arm64 / arm）')
+        """
+        let r = await rt.exec("python3 -c " + shellQuote(py), timeout: 90)
+        return aiClip(r.out)
+    }
+
+    /// r2ghidra 伪代码（对齐 AzTuT 的 r2ghidra 插件能力）：
+    /// pdgj（Ghidra 级）→ pdc（r2 自带）→ pdf（反汇编）自动降级。
+    @MainActor
+    func aiPseudo(target: String, off: String, timeout: Double = 240) async -> String {
+        guard rt.stage.isReady else { return "本机 Linux 未启动，r2ghidra 跑不了。" }
+        guard !target.isEmpty else { return "缺少 target 参数。" }
+
+        let addr = off.isEmpty ? "main" : off
+        let cmds: [(String, String)] = [("pdgj", "r2ghidra"), ("pdc", "r2pdc"), ("pdf", "asm")]
+        for (c, name) in cmds {
+            let full = "radare2 -q -e scr.color=0 -e bin.cache=true "
+                + "-c 's \(esc(addr))' -c 'af' -c '\(c)' -c 'q' -- '\(esc(target))' 2>&1"
+            let r = await rt.exec(full, timeout: timeout)
+            let body = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
+            if Self.badOutput(body) { continue }
+            return "[\(name)]\n" + aiClip(body)
+        }
+        return "三种引擎都没能在这个地址上出结果（pdgj / pdc / pdf 全部失败）。先用 rev_local_funcs 或 r2_execute 的 afl 确认函数地址。"
+    }
+
     private func shellQuote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
