@@ -196,8 +196,8 @@ final class LinuxRuntime: ObservableObject {
             NpcLog.write("boot: 会话已建立")
             DispatchQueue.main.async { npc_linux_session_resize(96, 30) }
         } else {
-            emit(.error, "[sh] 会话启动失败（code \(s)）")
-            NpcLog.write("boot: 会话启动失败 code=\(s)")
+            emit(.error, "[sh] 交互会话建立失败（code \(s)）——终端自动走管道模式，命令照常能跑，只是没有 shell 提示符和交互式程序")
+            NpcLog.write("boot: 会话启动失败 code=\(s)，回退管道")
         }
     }
 
@@ -286,12 +286,15 @@ final class LinuxRuntime: ObservableObject {
         }
     }
 
-    /// 敲键盘（原始字节，支持转义序列）
-    func send(_ bytes: String) {
-        guard booted else { return }
+    /// 敲键盘（原始字节，支持转义序列）。返回 false 表示这串字节压根没送进去。
+    @discardableResult
+    func send(_ bytes: String) -> Bool {
+        guard booted else { return false }
+        var ok = false
         bytes.withCString { p in
-            _ = npc_linux_session_write(p, Int32(bytes.utf8.count))
+            ok = npc_linux_session_write(p, Int32(bytes.utf8.count)) > 0
         }
+        return ok
     }
 
     /// 会话还活着吗。pty 那头 sh 退出后就是 false。
@@ -299,17 +302,31 @@ final class LinuxRuntime: ObservableObject {
 
     /// 往真 shell 里送一整行。会话没了就先拉一个新的。
     /// 终端页的输入框走这条路径，输出由 pty 回调直接上屏，提示符也是真的。
+    ///
+    /// pty 这条路要是彻底不通（会话建不起来，或写不进去），退回管道模式：
+    /// npc_linux_exec 走的是另一条链路（宿主 pipe 装 fd1/2，不碰 tty），
+    /// 所以哪怕 pty/tty driver 全坏，终端页依然能敲命令、能看到输出。
+    /// 否则表现就是「敲了没反应」——连个错都不报。
     @discardableResult
     func sendLine(_ cmd: String) -> Bool {
         guard booted else { return false }
+
         if npc_linux_session_alive() == 0 {
             if npc_linux_session_open() != 0 {
-                emit(.error, "[sh] 会话已结束，且重建失败")
-                return false
+                emit(.system, "[sh] pty 会话不可用，已切到管道模式（exec 直跑，无交互提示符）")
+                NpcLog.write("term: pty 不可用，回退管道")
+                runInTerminal(cmd)
+                return true
             }
             DispatchQueue.main.async { npc_linux_session_resize(96, 30) }
         }
-        send(cmd + "\n")
+
+        if send(cmd + "\n") { return true }
+
+        // 会话看着活着，但字节没写进去（tty 那头已关 / refcount 归零）
+        emit(.system, "[sh] 写入 pty 失败，已切到管道模式")
+        NpcLog.write("term: pty 写入失败，回退管道")
+        runInTerminal(cmd)
         return true
     }
 
