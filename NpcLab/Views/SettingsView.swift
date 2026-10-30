@@ -325,131 +325,239 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - 服务商表单（新建 + 编辑共用）
+// MARK: - 服务商配置表单（对齐 Minis 的「配置 X」页）
 
-/// 服务商配置表单主体：名称 / 中转站 / 自动补 v1 / Key / 模型 / 获取模型。
-/// ProviderEditor（编辑已有）和 AddProviderView（新建分步）都复用这一块。
+/// 服务商配置表单主体。字段顺序与文案严格对齐 Minis：
+///   标签 / API KEY（眼睛 + 钥匙串说明）/ 自定义 API 地址（可选）+ 自动附加 "/v1"
+///   / API 格式（仅 OpenAI）/（可选）模型分区 + 启用开关 /（可选）底部添加按钮。
+/// 新建（AddProviderView）与编辑（ProviderEditor）共用：
+///   - 新建：showModels=false、showStatus=false、onAdd=提交
+///   - 编辑：showModels=true、showStatus=true、onAdd=nil（用工具栏保存）
 struct ProviderFormFields: View {
     @Binding var p: ProviderInstance
     var isVoice: Bool = false
-    var voiceNote: String? = nil
+    var showModels: Bool = false
+    var showStatus: Bool = false
+    var showsAddButton: Bool = false
+    var onAdd: () -> Void = {}
 
+    @State private var showKey = false
     @State private var fetching = false
     @State private var fetchMsg: String?
-    @State private var manualModel = ""
-    /// 模型下拉里「手动输入…」的哨兵 tag
-    private static let manualTag = "__manual__"
+    @State private var showAddModel = false
+    @State private var addModelText = ""
 
     var body: some View {
         Form {
-            Section("名称") {
-                TextField("名称（唯一标识）", text: $p.name)
+            // 1. 标签
+            Section("标签") {
+                TextField("标签", text: $p.name)
+                    .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
             }
 
+            // 2. API KEY
             Section {
-                TextField("接口地址（中转站）", text: $p.baseURL)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
-                Toggle("自动补 /v1", isOn: $p.appendV1Suffix)
+                HStack(spacing: 8) {
+                    Group {
+                        if showKey {
+                            TextField(keyPlaceholder, text: $p.apiKey)
+                                .font(.system(.body, design: .monospaced))
+                        } else {
+                            SecureField(keyPlaceholder, text: $p.apiKey)
+                                .font(.system(.body, design: .monospaced))
+                        }
+                    }
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                    Button {
+                        showKey.toggle()
+                    } label: {
+                        Image(systemName: showKey ? "eye.slash" : "eye")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             } header: {
-                Text("连接")
+                Text("API KEY")
+            } footer: {
+                Text("您的密钥安全存储在 iOS 钥匙串中，不会离开设备。")
+            }
+
+            // 3. 自定义 API 地址（可选）+ 自动附加 /v1
+            Section {
+                TextField(basePlaceholder, text: $p.baseURL)
+                    .font(.system(.body, design: .monospaced))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+
+                if !isVoice, p.providerType != "gemini" {
+                    Toggle("自动附加 \"/v1\"", isOn: $p.appendV1Suffix)
+                }
+            } header: {
+                Text("自定义 API 地址（可选）")
             } footer: {
                 Text(isVoice
-                     ? "\(voiceNote ?? "") 语音端点已预填，通常不用改。"
-                     : "中转站就是 OpenAI 兼容的代理 / 网关地址，例如 https://api.your-relay.com。只填主机名会自动补 /v1；已带 /v1 或 /v1beta 就不重复补。留空用官方地址。")
-                    .font(.system(size: 11)).foregroundColor(.secondary)
+                     ? "语音服务端点地址。"
+                     : (p.appendV1Suffix
+                        ? "留空则使用默认端点。\"/v1\" 会自动附加 — 只需输入基础主机地址。"
+                        : "该 URL 原样使用。请填完整路径（不含 /chat/completions 等端点）。"))
             }
 
-            Section("密钥") {
-                TextField("API Key", text: $p.apiKey)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
-            }
-
-            if !isVoice {
+            // 4. API 格式（仅 OpenAI）
+            if p.providerType == "openai" && !isVoice {
                 Section {
-                    modelField
+                    Picker("API 格式", selection: $p.apiFormat) {
+                        Text("Chat Completions").tag("chat")
+                        Text("Responses API").tag("responses")
+                    }
+                } footer: {
+                    Text(p.apiFormat == "responses"
+                         ? "使用 /v1/responses 端点格式。"
+                         : "标准 /v1/chat/completions 格式。兼容大多数 OpenAI 兼容服务。")
+                }
+            }
+
+            // 5. 模型分区（编辑详情页）
+            if showModels {
+                modelSection
+            }
+
+            // 6. 启用开关（编辑详情页）
+            if showStatus {
+                Section("状态") {
+                    Toggle("启用", isOn: $p.isEnabled)
+                }
+            }
+
+            // 7. 底部「添加 AI 服务商」按钮（新建流程）
+            if showsAddButton {
+                Section {
                     Button {
-                        fetchModels()
+                        onAdd()
                     } label: {
                         HStack {
-                            if fetching {
-                                ProgressView().controlSize(.small)
-                                Text("正在获取…").padding(.leading, 6)
-                            } else {
-                                Text(p.models.isEmpty ? "获取模型列表" : "重新获取模型列表")
+                            Spacer()
+                            Text("添加 AI 服务商").font(.body.weight(.semibold))
+                            Spacer()
+                        }
+                    }
+                    .disabled(!canAdd)
+                }
+            }
+        }
+        .alert("手动添加模型", isPresented: $showAddModel) {
+            TextField("模型 ID", text: $addModelText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("添加") {
+                let t = addModelText.trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty {
+                    if !p.models.contains(t) { p.models.append(t) }
+                    p.model = t
+                }
+                addModelText = ""
+            }
+            Button("取消", role: .cancel) { addModelText = "" }
+        }
+    }
+
+    // MARK: 模型分区（对齐 Minis 的 Models + Refresh）
+
+    private var modelSection: some View {
+        Section {
+            if p.models.isEmpty {
+                Text("暂无模型，点右上角刷新从 /models 拉取")
+                    .font(.system(size: 12)).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(p.models, id: \.self) { m in
+                    Button {
+                        p.model = m
+                    } label: {
+                        HStack {
+                            Text(m)
+                                .font(.system(size: 13.5)).foregroundColor(.primary)
+                                .lineLimit(1)
+                            Spacer()
+                            if p.model == m {
+                                Image(systemName: "checkmark")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(.accentColor)
                             }
                         }
-                        .frame(maxWidth: .infinity)
                     }
-                    .disabled(fetching)
-                    if let m = fetchMsg {
-                        Text(m)
-                            .font(.system(size: 11))
-                            .foregroundColor(m.hasPrefix("已获取") ? .secondary : .red)
-                    }
-                } header: {
-                    Text("模型")
-                } footer: {
-                    Text("点「获取模型列表」从 /models 接口自动拉取；拉不到就手填模型 ID。")
-                        .font(.system(size: 11)).foregroundColor(.secondary)
                 }
             }
 
-            Section {
-                Toggle("启用此服务商", isOn: $p.isEnabled)
+            Button {
+                showAddModel = true
+            } label: {
+                Label("手动添加模型", systemImage: "plus.circle")
+                    .font(.system(size: 13)).foregroundColor(.accentColor)
             }
-
-            Section {
-                Text(p.isAnthropic
-                     ? "Anthropic 走 Messages API（x-api-key + anthropic-version）。"
-                     : "OpenAI 兼容，走 /chat/completions（Bearer Token）。OpenRouter / xAI / Gemini / Kimi / Copilot 都兼容此协议，改中转站地址即可。")
-                    .font(.system(size: 11)).foregroundColor(.secondary)
-            }
-        }
-    }
-
-    /// 模型字段：已拉取列表 → 下拉选择（含「手动输入…」）；没列表 → 纯手填。
-    @ViewBuilder
-    private var modelField: some View {
-        if p.models.isEmpty {
-            TextField("模型 ID", text: $p.model)
-                .autocorrectionDisabled().textInputAutocapitalization(.never)
-        } else {
-            Picker("模型", selection: Binding(
-                get: { p.models.contains(p.model) ? p.model : Self.manualTag },
-                set: { newVal in
-                    if newVal != Self.manualTag {
-                        p.model = newVal
+        } header: {
+            HStack {
+                Text("模型")
+                Spacer()
+                Button {
+                    refreshModels()
+                } label: {
+                    if fetching {
+                        ProgressView().controlSize(.small)
                     } else {
-                        p.model = manualModel.trimmingCharacters(in: .whitespaces)
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("刷新")
+                        }
+                        .font(.caption)
                     }
                 }
-            )) {
-                ForEach(p.models, id: \.self) { m in
-                    Text(m).tag(m)
-                }
-                Text("手动输入…").tag(Self.manualTag)
+                .disabled(fetching)
             }
-            if !p.models.contains(p.model) {
-                TextField("手动输入模型 ID", text: $manualModel)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
-                    .onChange(of: manualModel) { v in
-                        let t = v.trimmingCharacters(in: .whitespaces)
-                        if !t.isEmpty { p.model = t }
-                    }
+        } footer: {
+            if let m = fetchMsg {
+                Text(m)
+                    .font(.system(size: 11))
+                    .foregroundColor(m.hasPrefix("已获取") ? .secondary : .red)
             }
         }
     }
 
-    private func fetchModels() {
-        let key = p.apiKey.trimmingCharacters(in: .whitespaces)
+    // MARK: 占位符 + 校验
+
+    private var keyPlaceholder: String {
+        switch p.providerType {
+        case "anthropic": return "sk-ant-..."
+        case "openRouter": return "sk-or-..."
+        case "xAI": return "xai-..."
+        case "gemini": return "Gemini API Key..."
+        case "kimiCode", "githubCopilot": return ""
+        default: return "sk-..."
+        }
+    }
+
+    private var basePlaceholder: String {
+        ProviderInstance.defaultBaseURL(p.providerType)
+    }
+
+    /// 能否提交：填了 key 就能加；OpenAI/Anthropic 兼容第三方端点填了自定义地址可空 key。
+    private var canAdd: Bool {
+        if !p.apiKey.trimmingCharacters(in: .whitespaces).isEmpty { return true }
         let base = p.baseURL.trimmingCharacters(in: .whitespaces)
+        if !base.isEmpty && (p.providerType == "openai" || p.providerType == "anthropic") {
+            return true
+        }
+        return false
+    }
+
+    private func refreshModels() {
+        let key = p.apiKey.trimmingCharacters(in: .whitespaces)
         if key.isEmpty {
             fetchMsg = "先填 API Key"
-            return
-        }
-        if base.isEmpty {
-            fetchMsg = "先填接口地址（中转站）"
             return
         }
         let snapshot = p
@@ -473,9 +581,10 @@ struct ProviderFormFields: View {
     }
 }
 
-// MARK: - 编辑已有服务商
+// MARK: - 编辑已有服务商（对齐 Minis 详情页）
 
-/// 编辑一个已存在的服务商实例（点列表行进入）。表单复用 ProviderFormFields。
+/// 编辑一个已存在的服务商实例（点列表行进入）。
+/// 展示 Models 分区 + 启用开关，可用工具栏保存。
 struct ProviderEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var p: ProviderInstance
@@ -488,7 +597,7 @@ struct ProviderEditor: View {
 
     var body: some View {
         NavigationView {
-            ProviderFormFields(p: $p)
+            ProviderFormFields(p: $p, showModels: true, showStatus: true)
                 .navigationTitle(p.name.isEmpty ? "服务商" : p.name)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -517,18 +626,19 @@ struct AddProviderView: View {
     @State private var started = false
     @State private var draft = ProviderInstance()
     @State private var isVoice = false
-    @State private var voiceNote: String? = nil
 
     var body: some View {
         NavigationView {
             Group {
                 if started {
-                    ProviderFormFields(p: $draft, isVoice: isVoice, voiceNote: voiceNote)
+                    ProviderFormFields(p: $draft, isVoice: isVoice, showsAddButton: true) {
+                        commit()
+                    }
                 } else {
                     typeList
                 }
             }
-            .navigationTitle(started ? "配置服务商" : "添加 AI 服务商")
+            .navigationTitle(started ? "配置 \(isVoice ? draft.name : draft.providerLabel)" : "添加 AI 服务商")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -536,7 +646,6 @@ struct AddProviderView: View {
                         if started {
                             started = false
                             isVoice = false
-                            voiceNote = nil
                         } else {
                             dismiss()
                         }
@@ -544,11 +653,19 @@ struct AddProviderView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if started {
-                        Button("添加") { commit() }
+                        Button {
+                            requestExit()
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
                     }
                 }
             }
         }
+    }
+
+    private func requestExit() {
+        dismiss()
     }
 
     // MARK: 类型列表（第一步）
@@ -650,7 +767,6 @@ struct AddProviderView: View {
         p.name = count == 0 ? base : "\(base) \(count + 1)"
         draft = p
         isVoice = false
-        voiceNote = nil
         started = true
     }
 
@@ -664,7 +780,6 @@ struct AddProviderView: View {
         p.isEnabled = false
         draft = p
         isVoice = true
-        voiceNote = "\(v.name) 是语音服务商"
         started = true
     }
 

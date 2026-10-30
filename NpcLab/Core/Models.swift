@@ -247,7 +247,9 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
     var id = UUID()
     var name: String = ""            // 唯一显示名 / label
     var providerType: String = "openai"  // openai / anthropic / openRouter / xAI / gemini / kimiCode
-    var baseURL: String = "https://api.openai.com/v1"
+    /// 自定义 API 地址（可选）。对齐 Minis：默认是「主机名」，不带头尾 /v1，
+    /// 由 appendV1Suffix 决定是否补 /v1。留空则用官方默认端点。
+    var baseURL: String = "https://api.openai.com"
     var apiKey: String = ""
     var model: String = "gpt-4o"
     var isEnabled: Bool = true
@@ -256,11 +258,13 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
     var appendV1Suffix: Bool = true
     /// 已拉取的模型 id 列表（缓存，供下拉选择；空则只能手填）
     var models: [String] = []
+    /// API 格式：OpenAI 专有。chat = /v1/chat/completions；responses = /v1/responses。
+    var apiFormat: String = "chat"
 
     init(id: UUID = UUID(), name: String = "", providerType: String = "openai",
-         baseURL: String = "https://api.openai.com/v1", apiKey: String = "",
+         baseURL: String = "https://api.openai.com", apiKey: String = "",
          model: String = "gpt-4o", isEnabled: Bool = true,
-         appendV1Suffix: Bool = true, models: [String] = []) {
+         appendV1Suffix: Bool = true, models: [String] = [], apiFormat: String = "chat") {
         self.id = id
         self.name = name
         self.providerType = providerType
@@ -270,12 +274,13 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
         self.isEnabled = isEnabled
         self.appendV1Suffix = appendV1Suffix
         self.models = models
+        self.apiFormat = apiFormat
     }
 
     /// 手写 Codable：appendV1Suffix / models 是后加的字段，老存档里没有，
     /// 交给合成的 Decodable 会因缺 key 整条抛错。这里 decodeIfPresent + 默认值兜底。
     enum CodingKeys: String, CodingKey {
-        case id, name, providerType, baseURL, apiKey, model, isEnabled, appendV1Suffix, models
+        case id, name, providerType, baseURL, apiKey, model, isEnabled, appendV1Suffix, models, apiFormat
     }
 
     init(from d: Decoder) throws {
@@ -283,12 +288,13 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
         id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
         name = (try? c.decode(String.self, forKey: .name)) ?? ""
         providerType = (try? c.decode(String.self, forKey: .providerType)) ?? "openai"
-        baseURL = (try? c.decode(String.self, forKey: .baseURL)) ?? "https://api.openai.com/v1"
+        baseURL = (try? c.decode(String.self, forKey: .baseURL)) ?? "https://api.openai.com"
         apiKey = (try? c.decode(String.self, forKey: .apiKey)) ?? ""
         model = (try? c.decode(String.self, forKey: .model)) ?? "gpt-4o"
         isEnabled = (try? c.decode(Bool.self, forKey: .isEnabled)) ?? true
         appendV1Suffix = (try? c.decode(Bool.self, forKey: .appendV1Suffix)) ?? true
         models = (try? c.decode([String].self, forKey: .models)) ?? []
+        apiFormat = (try? c.decode(String.self, forKey: .apiFormat)) ?? "chat"
     }
 
     func encode(to e: Encoder) throws {
@@ -302,10 +308,14 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
         try c.encode(isEnabled, forKey: .isEnabled)
         try c.encode(appendV1Suffix, forKey: .appendV1Suffix)
         try c.encode(models, forKey: .models)
+        try c.encode(apiFormat, forKey: .apiFormat)
     }
 
     /// 协议只有两类：Anthropic Messages API，其余全是 OpenAI 兼容 /chat/completions
     var isAnthropic: Bool { providerType == "anthropic" }
+
+    /// OpenAI 专有：是否走 /v1/responses（否则 /v1/chat/completions）
+    var isResponses: Bool { providerType == "openai" && apiFormat == "responses" }
 
     /// 请求用 base URL：去尾斜杠；按 appendV1Suffix 决定是否补 /v1。
     /// 已带版本路径（/v1、/v2、/v1beta、/api/v1、/api）就不再重复拼，避免 /v1/v1。
@@ -332,16 +342,17 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
         }
     }
 
-    /// 该服务商的默认 baseURL（新建实例时预填）
+    /// 该服务商的默认 baseURL（新建实例时预填）。对齐 Minis：OpenAI / Anthropic
+    /// 只给主机名，靠 appendV1Suffix 补 /v1；其余本身已带版本路径。
     static func defaultBaseURL(_ type: String) -> String {
         switch type {
-        case "anthropic": return "https://api.anthropic.com/v1"
+        case "anthropic": return "https://api.anthropic.com"
         case "openRouter": return "https://openrouter.ai/api/v1"
         case "xAI": return "https://api.x.ai/v1"
         case "gemini": return "https://generativelanguage.googleapis.com/v1beta"
-        case "kimiCode": return "https://api.kimi.com/coding/v1"
+        case "kimiCode": return "https://api.kimi.com/coding"
         case "githubCopilot": return "https://api.githubcopilot.com"
-        default: return "https://api.openai.com/v1"
+        default: return "https://api.openai.com"
         }
     }
 

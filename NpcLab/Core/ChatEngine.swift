@@ -77,7 +77,8 @@ final class ChatEngine: ObservableObject {
         let prov = st.activeProvider
         let base = prov.resolvedBaseURL
         let isAnthropic = prov.isAnthropic
-        let path = isAnthropic ? "/messages" : "/chat/completions"
+        let isResponses = prov.isResponses
+        let path = isAnthropic ? "/messages" : (isResponses ? "/responses" : "/chat/completions")
         guard let url = URL(string: base + path) else { throw BridgeError.badURL }
 
         var req = URLRequest(url: url, timeoutInterval: 180)
@@ -93,16 +94,25 @@ final class ChatEngine: ObservableObject {
         let msgs = trimHistory(st)
         var payload: [String: Any] = [
             "model": prov.model,
-            "max_tokens": st.maxTokens,
             "temperature": st.temperature,
             "stream": st.streamOn
         ]
         if isAnthropic {
+            payload["max_tokens"] = st.maxTokens
             payload["system"] = system
             payload["messages"] = msgs.map { m -> [String: Any] in
                 ["role": m.role, "content": Self.content(m, anthropic: true)]
             }
+        } else if isResponses {
+            // Responses API：用 input 数组 + max_output_tokens，system 放在 input 第一条
+            payload["max_output_tokens"] = st.maxTokens
+            var input: [[String: Any]] = [["role": "system", "content": system]]
+            input.append(contentsOf: msgs.map { m -> [String: Any] in
+                ["role": m.role, "content": Self.content(m, anthropic: false)]
+            })
+            payload["input"] = input
         } else {
+            payload["max_tokens"] = st.maxTokens
             var arr: [[String: Any]] = [["role": "system", "content": system]]
             arr.append(contentsOf: msgs.map { m -> [String: Any] in
                 ["role": m.role, "content": Self.content(m, anthropic: false)]
@@ -112,7 +122,7 @@ final class ChatEngine: ObservableObject {
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         if st.streamOn {
-            return try await streamText(req, anthropic: isAnthropic)
+            return try await streamText(req, anthropic: isAnthropic, responses: isResponses)
         } else {
             let (data, resp) = try await MITMInterceptor.session.data(for: req)
             guard let http = resp as? HTTPURLResponse else { throw BridgeError.offline }
@@ -124,6 +134,18 @@ final class ChatEngine: ObservableObject {
                 if let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let blocks = o["content"] as? [[String: Any]] {
                     return blocks.compactMap { $0["text"] as? String }.joined()
+                }
+                return raw
+            } else if isResponses {
+                if let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let out = o["output"] as? [[String: Any]] {
+                    var parts: [String] = []
+                    for item in out {
+                        if let content = item["content"] as? [[String: Any]] {
+                            parts.append(contentsOf: content.compactMap { $0["text"] as? String })
+                        }
+                    }
+                    if !parts.isEmpty { return parts.joined() }
                 }
                 return raw
             } else {
@@ -138,7 +160,7 @@ final class ChatEngine: ObservableObject {
         }
     }
 
-    private func streamText(_ req: URLRequest, anthropic: Bool) async throws -> String {
+    private func streamText(_ req: URLRequest, anthropic: Bool, responses: Bool = false) async throws -> String {
         let (bytes, resp) = try await MITMInterceptor.session.bytes(for: req)
         guard let http = resp as? HTTPURLResponse else { throw BridgeError.offline }
 
@@ -173,6 +195,17 @@ final class ChatEngine: ObservableObject {
                    let txt = delta["text"] as? String {
                     full += txt
                     self.live = full
+                }
+            } else if responses {
+                // Responses API 流式：response.output_text.delta 带 delta 字段；
+                // response.completed 结束。
+                if let t = o["type"] as? String {
+                    if t == "response.completed" { break }
+                    if t == "response.output_text.delta",
+                       let txt = o["delta"] as? String {
+                        full += txt
+                        self.live = full
+                    }
                 }
             } else {
                 if let ch = o["choices"] as? [[String: Any]],
