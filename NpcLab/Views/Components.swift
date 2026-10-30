@@ -113,6 +113,76 @@ struct IconToggleRow: View {
     }
 }
 
+/// 单选行：圆形图标 + 标题 + 副标题 + 右侧选中圆（对齐 AzTuT「权限档位」）
+struct RadioRow: View {
+    var color: Color
+    var symbol: String
+    var title: String
+    var sub: String = ""
+    var selected: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 11) {
+                ZStack {
+                    Circle().fill(color.opacity(0.16))
+                    Image(systemName: symbol)
+                        .font(.system(size: 12, weight: .semibold)).foregroundColor(color)
+                }
+                .frame(width: 27, height: 27)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 14.5)).foregroundColor(T.txt)
+                    if !sub.isEmpty {
+                        Text(sub).font(.system(size: 11.5)).foregroundColor(T.txt3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                Spacer(minLength: 6)
+
+                // 选中态用实心圆环，跟 iOS 设置里的勾选同风格
+                ZStack {
+                    Circle()
+                        .strokeBorder(selected ? T.accent : T.txt3.opacity(0.5), lineWidth: 1.5)
+                        .frame(width: 19, height: 19)
+                    if selected {
+                        Circle().fill(T.accent).frame(width: 11, height: 11)
+                    }
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// 值行：左边标题，右边等宽值（对齐 AzTuT「行为」里的工作目录 / 输出上限）
+struct ValueRow: View {
+    var title: String
+    var value: String
+    var editable: Bool = false
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        HStack {
+            Text(title).font(.system(size: 14.5)).foregroundColor(T.txt)
+            Spacer(minLength: 8)
+            Text(value).font(T.mono(13)).foregroundColor(editable ? T.accent : T.txt2)
+                .lineLimit(1).truncationMode(.middle)
+            if editable {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold)).foregroundColor(T.txt3)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 11)
+        .contentShape(Rectangle())
+        .onTapGesture { if editable { action?() } }
+    }
+}
+
 /// 区块下方的灰色说明文字（AzTuT 每个区块下面都有一段）
 struct SectionFootnote: View {
     var text: String

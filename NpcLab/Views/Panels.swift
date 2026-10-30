@@ -242,6 +242,160 @@ struct HostPanel: View {
 
 struct TermPanel: View {
     @EnvironmentObject var st: AppSettings
+    @ObservedObject private var rt = LinuxRuntime.shared
+
+    @State private var editWorkdir = false
+    @State private var editMaxLines = false
+
+    var body: some View {
+        PanelShell(title: "终端") {
+
+            // ===== 权限档位 =====
+            SectionTitle(text: "权限档位")
+            Card(padding: 0) {
+                VStack(spacing: 0) {
+                    RadioRow(color: T.accent, symbol: "person.fill",
+                             title: "App 原生权限",
+                             sub: "以当前应用身份运行，只能访问沙盒与已挂载的目录。最安全。",
+                             selected: st.execIdentity == "user") {
+                        st.execIdentity = "user"
+                    }
+                    RowDivider()
+                    RadioRow(color: T.orange, symbol: "person.fill",
+                             title: "iSH Root",
+                             sub: "在 iSH 模拟环境中以 root 运行，可读写整个 Alpine 根文件系统；对读写挂载的宿主目录同样可写。",
+                             selected: st.execIdentity == "admin") {
+                        st.execIdentity = "admin"
+                    }
+                    RowDivider()
+                    RadioRow(color: T.purple, symbol: "crown.fill",
+                             title: "系统 Root（实验性）",
+                             sub: "尝试通过越狱环境获取真实 iOS root，可访问沙盒外的系统路径。依赖平台签名标志，可能失败。",
+                             selected: st.execIdentity == "system") {
+                        st.execIdentity = "system"
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            SectionFootnote(text: "控制终端命令以什么身份执行。系统 Root 依赖越狱环境的平台签名标志，若不可用会自动回落到 iSH Root。")
+
+            // ===== AI 联动 =====
+            SectionTitle(text: "AI 联动")
+            Card(padding: 0) {
+                IconToggleRow(color: T.accent, symbol: "sparkles",
+                              title: "允许 AI 调用终端",
+                              sub: "开启后 AI 可通过 shell_execute 执行命令",
+                              on: $st.allowExec)
+            }
+            SectionFootnote(text: "AI 执行的命令使用与上方相同的权限档位。关闭后 AI 将无法执行任何 shell 命令。")
+
+            // ===== 行为 =====
+            SectionTitle(text: "行为")
+            Card(padding: 0) {
+                VStack(spacing: 0) {
+                    ValueRow(title: "工作目录", value: st.execWorkdir, editable: true) {
+                        editWorkdir = true
+                    }
+                    RowDivider()
+                    ValueRow(title: "输出上限", value: "\(st.execMaxLines) 行", editable: true) {
+                        editMaxLines = true
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            // ===== 当前状态 =====
+            SectionTitle(text: "当前状态")
+            Card {
+                VStack(alignment: .leading, spacing: 3) {
+                    statusLine("终端权限档位", identityLabel)
+                    statusLine("AI 终端调用", st.allowExec ? "已开启" : "已关闭")
+                    statusLine("工作目录", st.execWorkdir)
+                    statusLine("输出上限", "\(st.execMaxLines) 行")
+                    statusLine("内核状态", rt.stage.label)
+                    statusLine("iSH 内核", String(cString: npc_linux_version()))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // 内核报错原文：启动失败时这里是唯一能定位问题的东西，
+                // 直接把这段截图就能看出卡在哪一步、errno 是多少。
+                if !kernelErr.isEmpty {
+                    Divider().overlay(T.line)
+                    Text(kernelErr)
+                        .font(T.mono(9.5)).foregroundColor(T.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            // ===== 说明 =====
+            SectionTitle(text: "说明")
+            Card {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 12)).foregroundColor(T.txt3)
+                    Text("iSH 是用户态模拟环境。iSH Root 对 Alpine 根文件系统是完全权限，但跨出模拟环境后仍受 iOS 沙盒限制 —— 那是内核强制的，绕不过去。系统 Root 只在越狱设备上才有意义，靠平台签名标志探测，不可靠时会自动回落到 iSH Root。")
+                        .font(.system(size: 11)).foregroundColor(T.txt3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            // ===== 节点命令（原执行面板搬去子页，主页面保持干净）=====
+            SectionTitle(text: "节点命令")
+            Card(padding: 0) {
+                NavigationLink { NodeShellPanel() } label: {
+                    NavRow(color: Color(white: 0.55), glyph: "$", title: "在 PC 节点上执行",
+                           sub: "走算力节点的 shell，跟本机 iSH 终端是两套东西")
+                }.buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $editWorkdir) {
+            PromptSheet(title: "工作目录",
+                        hint: "终端会话的初始目录，必须存在于 Alpine 里（例如 /root、/home、/tmp）",
+                        placeholder: "/root",
+                        initial: st.execWorkdir) { v in
+                let t = v.trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty { st.execWorkdir = t }
+            }
+        }
+        .sheet(isPresented: $editMaxLines) {
+            PromptSheet(title: "输出上限",
+                        hint: "单次命令最多保留多少行回显（100 - 20000）",
+                        placeholder: "2000",
+                        initial: "\(st.execMaxLines)") { v in
+                if let n = Int(v.trimmingCharacters(in: .whitespaces)), n > 0 {
+                    st.execMaxLines = min(max(n, 100), 20000)
+                }
+            }
+        }
+    }
+
+    private var identityLabel: String {
+        switch st.execIdentity {
+        case "admin":  return "iSH Root"
+        case "system": return "系统 Root（实验性）"
+        default:       return "App 原生权限"
+        }
+    }
+
+    /// 内核最后一次报错（npc_linux_last_error 是 C 字符串，可能为空串）
+    private var kernelErr: String {
+        String(cString: npc_linux_last_error())
+    }
+
+    private func statusLine(_ k: String, _ v: String) -> some View {
+        HStack(spacing: 0) {
+            Text("\(k)：").foregroundColor(T.txt3)
+            Text(v).foregroundColor(T.txt2)
+        }
+        .font(T.mono(10.5))
+    }
+}
+
+/// 节点命令：在 PC 节点上跑 shell。原来的 TermPanel 主体搬到这里，
+/// 入口在「终端 → 节点命令」。跟本机 iSH 终端是两条完全不同的链路。
+struct NodeShellPanel: View {
+    @EnvironmentObject var st: AppSettings
     @EnvironmentObject var hub: NodeHub
 
     @State private var cmd = ""
@@ -251,7 +405,7 @@ struct TermPanel: View {
     @State private var history: [String] = []
 
     var body: some View {
-        PanelShell(title: "终端", sub: "命令在节点上执行；身份决定它有没有管理员权限") {
+        PanelShell(title: "节点命令", sub: "命令在节点上执行；身份决定它有没有管理员权限") {
             Card {
                 Text("执行身份").font(.system(size: 12, weight: .semibold)).foregroundColor(T.txt2)
                 Picker("", selection: $st.execIdentity) {
@@ -327,7 +481,7 @@ struct TermPanel: View {
                     }
                 }
                 if !st.allowExec {
-                    Text("未授权执行：设置 → 权限 → 命令执行")
+                    Text("未授权执行：设置 → 终端 → 允许 AI 调用终端")
                         .font(.system(size: 10.5)).foregroundColor(T.orange)
                 }
             }

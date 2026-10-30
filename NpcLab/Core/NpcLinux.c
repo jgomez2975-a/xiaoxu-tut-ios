@@ -398,7 +398,10 @@ static void *kernel_main(void *arg) {
     // 不是 rootfs 根目录本身。传错就是 meta.db 找不到 → 挂载失败。
     int err = mount_root(&fakefs, g_data_dir);
     if (err < 0) {
-        set_err("fakefs 挂载失败：检查 rootfs 下是否有 meta.db 和 data/");
+        snprintf(g_err, sizeof(g_err),
+                 "[1/5 挂载] fakefs 挂载失败 (errno=%d)\n源: %s\n"
+                 "检查 rootfs 下是否有 meta.db 和 data/ 两个东西。",
+                 err, g_data_dir);
         g_boot_err = err;
         goto boot_done;
     }
@@ -406,7 +409,9 @@ static void *kernel_main(void *arg) {
     // ---- 2. 变成 pid 1 之前的第一个进程 ----
     err = become_first_process();
     if (err < 0) {
-        set_err("become_first_process 失败");
+        snprintf(g_err, sizeof(g_err),
+                 "[2/5 建进程] become_first_process 失败 (errno=%d)。"
+                 "通常是内存不足或上一轮内核没退干净。", err);
         g_boot_err = err;
         goto boot_done;
     }
@@ -443,7 +448,14 @@ static void *kernel_main(void *arg) {
         "/bin/sh\0-c\0trap 'exit 0' TERM INT; while :; do sleep 3600; done\0";
     err = do_execve("/bin/sh", 3, kInitArgv, kEnv);
     if (err < 0) {
-        set_err("exec pid 1 失败：rootfs 里的 /bin/sh 可能不是 aarch64");
+        // -ENOEXEC(=-8) 基本就是二进制架构不对；ENOENT 是 /bin/sh 不存在
+        const char *hint =
+            (err == -8)  ? "rootfs 里的 /bin/sh 不是 aarch64（旧版 i386 rootfs 残留？删掉重装）" :
+            (err == -2)  ? "/bin/sh 在 rootfs 里不存在（meta.db 里没有这条路径）" :
+            (err == -13) ? "权限不足，/bin/sh 没有可执行位" :
+                           "exec 被拒。详见 errno。";
+        snprintf(g_err, sizeof(g_err),
+                 "[5/5 exec] do_execve(\"/bin/sh\") 失败 (errno=%d)\n%s", err, hint);
         g_boot_err = err;
         goto boot_done;
     }

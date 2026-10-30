@@ -156,6 +156,10 @@ final class AppSettings: ObservableObject {
     @Published var execShell: String = "sh" { didSet { save() } }
     @Published var execIdentity: String = "user" { didSet { save() } }   // user / admin / system
     @Published var execTimeout: Int = 60 { didSet { save() } }
+    /// 终端页的初始工作目录（对齐 AzTuT 的「行为 → 工作目录」）
+    @Published var execWorkdir: String = "/root" { didSet { save() } }
+    /// 单次命令回显最多保留多少行（对齐 AzTuT 的「行为 → 输出上限」）
+    @Published var execMaxLines: Int = 2000 { didSet { save() } }
     @Published var ghToken: String = "" { didSet { save() } }
     @Published var ghRepo: String = "" { didSet { save() } }
     @Published var ctxLimit: Int = 32000 { didSet { save() } }

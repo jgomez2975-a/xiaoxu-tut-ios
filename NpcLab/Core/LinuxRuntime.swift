@@ -73,6 +73,33 @@ final class LinuxRuntime: ObservableObject {
         }
     }
 
+    /// 判断已解压的 rootfs 是不是 aarch64。
+    ///
+    /// 读 data/bin/busybox 的 ELF 头（e_machine 在 offset 18，小端 16 位）：
+    ///   0xB7 = EM_AARCH64，0x03 = EM_386。
+    /// Alpine 里 /bin/sh 是 busybox 的软链，而 fakefs 的 data/ 下软链是「内容为
+    /// 目标路径的普通文件」，所以不能拿 sh 判断，得找真正的 ELF。
+    ///
+    /// 读不到任何 ELF 时返回 true —— 判断不了就别删人家 163MB 的 rootfs，
+    /// 让后面 exec 失败时报具体错误更有价值。
+    private func rootfsArchIsAarch64(_ root: URL) -> Bool {
+        let candidates = ["data/bin/busybox", "data/bin/busybox.static",
+                          "data/sbin/apk", "data/bin/sh"]
+        for rel in candidates {
+            let u = root.appendingPathComponent(rel)
+            guard let fh = try? FileHandle(forReadingFrom: u) else { continue }
+            defer { try? fh.close() }
+            guard let head = try? fh.read(upToCount: 20), head.count >= 20 else { continue }
+            // 只认 ELF 魔数，脚本/软链占位文件跳过
+            guard head[0] == 0x7F, head[1] == 0x45,
+                  head[2] == 0x4C, head[3] == 0x46 else { continue }
+            let machine = UInt16(head[18]) | (UInt16(head[19]) << 8)
+            NpcLog.write("boot: \(rel) e_machine=0x\(String(machine, radix: 16))")
+            return machine == 0xB7
+        }
+        return true
+    }
+
     private func prepareAndBoot() {
         let fm = FileManager.default
         try? fm.createDirectory(at: rootfsDir.deletingLastPathComponent(),
@@ -81,10 +108,26 @@ final class LinuxRuntime: ObservableObject {
         NpcLog.write("boot: 开始 · dir=\(rootfsDir.path)")
 
         // 1. rootfs：已经解过就跳过
-        if npc_unzip_is_done(rootfsDir.path) == 1 {
-            emit(.system, "[rootfs] 已存在，跳过解压")
-            NpcLog.write("boot: rootfs 已存在")
-        } else {
+        //
+        // 但「解过」不等于「能用」：npc_unzip_is_done 只看 meta.db 在不在，
+        // 不校验架构。如果设备上残留的是旧版 i386 rootfs（这个项目早期用过
+        // kernel=linux + i386），内核是 ARM64 guest，去 exec 一个 i386 的
+        // /bin/sh 会直接 -ENOEXEC —— 表现出来就是「终端点开就失败」，
+        // 而且重装 App 未必会清沙盒，很容易反复踩。
+        var needUnzip = npc_unzip_is_done(rootfsDir.path) == 0
+        if !needUnzip {
+            if rootfsArchIsAarch64(rootfsRoot) {
+                emit(.system, "[rootfs] 已存在（aarch64），跳过解压")
+                NpcLog.write("boot: rootfs 已存在且架构正确")
+            } else {
+                emit(.system, "[rootfs] 已存在的 rootfs 不是 aarch64，清掉重新解压")
+                NpcLog.write("boot: rootfs 架构不匹配，删除重解")
+                try? fm.removeItem(at: rootfsDir)
+                needUnzip = true
+            }
+        }
+
+        if needUnzip {
             guard let zip = Bundle.main.url(forResource: "alpine-rootfs", withExtension: "zip") else {
                 fail("bundle 里找不到 alpine-rootfs.zip")
                 return
