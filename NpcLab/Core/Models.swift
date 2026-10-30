@@ -251,9 +251,72 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
     var apiKey: String = ""
     var model: String = "gpt-4o"
     var isEnabled: Bool = true
+    /// 自动补 /v1：中转站只填主机名（如 https://api.xxx.com）时自动拼上 /v1。
+    /// 已带 /v1 或 /v1beta 等版本路径时不会重复拼。
+    var appendV1Suffix: Bool = true
+    /// 已拉取的模型 id 列表（缓存，供下拉选择；空则只能手填）
+    var models: [String] = []
+
+    init(id: UUID = UUID(), name: String = "", providerType: String = "openai",
+         baseURL: String = "https://api.openai.com/v1", apiKey: String = "",
+         model: String = "gpt-4o", isEnabled: Bool = true,
+         appendV1Suffix: Bool = true, models: [String] = []) {
+        self.id = id
+        self.name = name
+        self.providerType = providerType
+        self.baseURL = baseURL
+        self.apiKey = apiKey
+        self.model = model
+        self.isEnabled = isEnabled
+        self.appendV1Suffix = appendV1Suffix
+        self.models = models
+    }
+
+    /// 手写 Codable：appendV1Suffix / models 是后加的字段，老存档里没有，
+    /// 交给合成的 Decodable 会因缺 key 整条抛错。这里 decodeIfPresent + 默认值兜底。
+    enum CodingKeys: String, CodingKey {
+        case id, name, providerType, baseURL, apiKey, model, isEnabled, appendV1Suffix, models
+    }
+
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        providerType = (try? c.decode(String.self, forKey: .providerType)) ?? "openai"
+        baseURL = (try? c.decode(String.self, forKey: .baseURL)) ?? "https://api.openai.com/v1"
+        apiKey = (try? c.decode(String.self, forKey: .apiKey)) ?? ""
+        model = (try? c.decode(String.self, forKey: .model)) ?? "gpt-4o"
+        isEnabled = (try? c.decode(Bool.self, forKey: .isEnabled)) ?? true
+        appendV1Suffix = (try? c.decode(Bool.self, forKey: .appendV1Suffix)) ?? true
+        models = (try? c.decode([String].self, forKey: .models)) ?? []
+    }
+
+    func encode(to e: Encoder) throws {
+        var c = e.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(providerType, forKey: .providerType)
+        try c.encode(baseURL, forKey: .baseURL)
+        try c.encode(apiKey, forKey: .apiKey)
+        try c.encode(model, forKey: .model)
+        try c.encode(isEnabled, forKey: .isEnabled)
+        try c.encode(appendV1Suffix, forKey: .appendV1Suffix)
+        try c.encode(models, forKey: .models)
+    }
 
     /// 协议只有两类：Anthropic Messages API，其余全是 OpenAI 兼容 /chat/completions
     var isAnthropic: Bool { providerType == "anthropic" }
+
+    /// 请求用 base URL：去尾斜杠；按 appendV1Suffix 决定是否补 /v1。
+    /// 已带版本路径（/v1、/v2、/v1beta、/api/v1、/api）就不再重复拼，避免 /v1/v1。
+    var resolvedBaseURL: String {
+        var b = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while b.hasSuffix("/") { b.removeLast() }
+        let hasVersion = b.hasSuffix("/v1") || b.hasSuffix("/v2")
+            || b.hasSuffix("/v1beta") || b.hasSuffix("/api/v1") || b.hasSuffix("/api")
+        if appendV1Suffix && !hasVersion { return b + "/v1" }
+        return b
+    }
 
     /// 显示用服务商名
     var providerLabel: String {

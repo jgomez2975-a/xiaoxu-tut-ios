@@ -190,8 +190,7 @@ final class ToolAgent: ObservableObject {
 
     private func endpoint(_ st: AppSettings) throws -> (URL, Bool) {
         let prov = st.activeProvider
-        var base = prov.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        while base.hasSuffix("/") { base.removeLast() }
+        let base = prov.resolvedBaseURL
         let isA = prov.isAnthropic
         guard let u = URL(string: base + (isA ? "/messages" : "/chat/completions")) else {
             throw BridgeError.badURL

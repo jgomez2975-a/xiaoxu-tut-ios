@@ -75,8 +75,7 @@ final class ChatEngine: ObservableObject {
 
     private func run(_ st: AppSettings, system: String) async throws -> String {
         let prov = st.activeProvider
-        var base = prov.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        while base.hasSuffix("/") { base.removeLast() }
+        let base = prov.resolvedBaseURL
         let isAnthropic = prov.isAnthropic
         let path = isAnthropic ? "/messages" : "/chat/completions"
         guard let url = URL(string: base + path) else { throw BridgeError.badURL }

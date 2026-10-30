@@ -228,6 +228,8 @@ struct SettingsView: View {
             ProviderEditor(provider: p) { updated in
                 if let idx = st.providers.firstIndex(where: { $0.id == updated.id }) {
                     st.providers[idx] = updated
+                    // 保存后自动拉一次模型列表：填了中转站和 key 但还没列表时
+                    autoFetchModels(at: idx)
                 }
             }
         }
@@ -306,6 +308,30 @@ struct SettingsView: View {
         }
     }
 
+    /// 保存服务商后后台拉一次 /models，拉回来就把模型变成下拉可选。
+    /// 拉不到就静默跳过 —— 用户还能回编辑器手填模型 ID。
+    private func autoFetchModels(at idx: Int) {
+        guard st.providers.indices.contains(idx) else { return }
+        let prov = st.providers[idx]
+        guard prov.models.isEmpty else { return }
+        let key = prov.apiKey.trimmingCharacters(in: .whitespaces)
+        let base = prov.baseURL.trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty, !base.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                let list = try await ModelCatalog.fetch(prov)
+                guard !list.isEmpty, st.providers.indices.contains(idx) else { return }
+                st.providers[idx].models = list
+                if !list.contains(st.providers[idx].model) {
+                    st.providers[idx].model = list[0]
+                }
+                st.log("模型", "自动获取到 \(list.count) 个模型（\(prov.name.isEmpty ? prov.providerLabel : prov.name)）")
+            } catch {
+                // 拉不到就算了，不打断用户
+            }
+        }
+    }
+
     private func statLine(_ k: String, _ v: String) -> some View {
         HStack {
             Text(k).font(.system(size: 12)).foregroundColor(T.txt2)
@@ -317,11 +343,19 @@ struct SettingsView: View {
 
 // MARK: - 服务商编辑器
 
-/// 编辑/新建一个服务商实例：服务商类型、名称、baseURL、Key、模型、启用。
+/// 编辑/新建一个服务商实例：服务商类型、名称、中转站地址、Key、模型、启用。
+/// 对齐 Minis：中转站只填主机名会自动补 /v1；点「获取模型列表」拉 /models 变成下拉选择。
 struct ProviderEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var p: ProviderInstance
     let onSave: (ProviderInstance) -> Void
+
+    @State private var fetching = false
+    @State private var fetchMsg: String?
+    @State private var manualModel = ""
+
+    /// 下拉里「手动输入…」的哨兵值
+    private static let customTag = "__custom__"
 
     init(provider: ProviderInstance, onSave: @escaping (ProviderInstance) -> Void) {
         _p = State(initialValue: provider)
@@ -338,31 +372,59 @@ struct ProviderEditor: View {
                         }
                     }
                     .onChange(of: p.providerType) { t in
-                        // 切类型时，若 baseURL/模型还停在上一家的默认值，换成新家的默认
-                        if p.baseURL == "https://api.openai.com/v1" ||
-                           p.baseURL == "https://api.anthropic.com/v1" ||
-                           p.baseURL == "https://openrouter.ai/api/v1" ||
-                           p.baseURL == "https://api.x.ai/v1" ||
-                           p.baseURL == "https://generativelanguage.googleapis.com/v1beta" ||
-                           p.baseURL == "https://api.kimi.com/coding/v1" {
+                        // 切类型时，若 baseURL/模型还停在上一家的默认值，换成新家的默认；模型列表清空重拉
+                        if Self.isDefaultBase(p.baseURL) {
                             p.baseURL = ProviderInstance.defaultBaseURL(t)
                         }
-                        if p.model == "gpt-4o" || p.model == "claude-sonnet-4-5" ||
-                           p.model == "openai/gpt-4o" || p.model == "grok-3" ||
-                           p.model == "gemini-2.5-pro" || p.model == "kimi-k2" {
+                        if Self.isDefaultModel(p.model) {
                             p.model = ProviderInstance.defaultModel(t)
                         }
+                        p.models = []
+                        fetchMsg = nil
                     }
                     TextField("名称（唯一标识）", text: $p.name)
                         .autocorrectionDisabled()
                 }
-                Section("连接") {
-                    TextField("接口地址", text: $p.baseURL)
+                Section {
+                    TextField("接口地址（中转站）", text: $p.baseURL)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    Toggle("自动补 /v1", isOn: $p.appendV1Suffix)
+                } header: {
+                    Text("连接")
+                } footer: {
+                    Text("中转站就是 OpenAI 兼容的代理 / 网关地址，例如 https://api.your-relay.com。只填主机名会自动补 /v1；已带 /v1 或 /v1beta 就不重复补。留空用官方地址。")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
+                Section("密钥") {
                     TextField("API Key", text: $p.apiKey)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
-                    TextField("模型", text: $p.model)
-                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                }
+                Section {
+                    modelField
+                    Button {
+                        fetchModels()
+                    } label: {
+                        HStack {
+                            if fetching {
+                                ProgressView().controlSize(.small)
+                                Text("正在获取…").padding(.leading, 6)
+                            } else {
+                                Text(p.models.isEmpty ? "获取模型列表" : "重新获取模型列表")
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .disabled(fetching)
+                    if let m = fetchMsg {
+                        Text(m)
+                            .font(.system(size: 11))
+                            .foregroundColor(m.hasPrefix("已获取") ? .secondary : .red)
+                    }
+                } header: {
+                    Text("模型")
+                } footer: {
+                    Text("点「获取模型列表」从 /models 接口自动拉取；拉不到就手填模型 ID。")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
                 }
                 Section {
                     Toggle("启用此服务商", isOn: $p.isEnabled)
@@ -370,7 +432,7 @@ struct ProviderEditor: View {
                 Section {
                     Text(p.isAnthropic
                          ? "Anthropic 走 Messages API（x-api-key + anthropic-version）。"
-                         : "OpenAI 兼容，走 /chat/completions（Bearer Token）。其余服务商（OpenRouter/xAI/Gemini/Kimi）都兼容此协议，改 baseURL 即可。")
+                         : "OpenAI 兼容，走 /chat/completions（Bearer Token）。其余服务商（OpenRouter/xAI/Gemini/Kimi）都兼容此协议，改中转站地址即可。")
                         .font(.system(size: 11)).foregroundColor(.secondary)
                 }
             }
@@ -382,12 +444,82 @@ struct ProviderEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
-                        // 切服务商类型时，若 baseURL/模型还是上一家的默认值，自动换成新家的默认
+                        if p.model == Self.customTag {
+                            p.model = manualModel.trimmingCharacters(in: .whitespaces)
+                        }
                         onSave(p)
                         dismiss()
                     }
                 }
             }
         }
+    }
+
+    /// 模型字段：已拉取列表 → 下拉选择（含「手动输入…」）；没列表 → 纯手填。
+    @ViewBuilder
+    private var modelField: some View {
+        if p.models.isEmpty {
+            TextField("模型 ID", text: $p.model)
+                .autocorrectionDisabled().textInputAutocapitalization(.never)
+        } else {
+            Picker("模型", selection: $p.model) {
+                ForEach(p.models, id: \.self) { m in
+                    Text(m).tag(m)
+                }
+                Text("手动输入…").tag(Self.customTag)
+            }
+            if p.model == Self.customTag {
+                TextField("模型 ID", text: $manualModel)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+            }
+        }
+    }
+
+    private func fetchModels() {
+        let key = p.apiKey.trimmingCharacters(in: .whitespaces)
+        let base = p.baseURL.trimmingCharacters(in: .whitespaces)
+        if key.isEmpty {
+            fetchMsg = "先填 API Key"
+            return
+        }
+        if base.isEmpty {
+            fetchMsg = "先填接口地址（中转站）"
+            return
+        }
+        let snapshot = p
+        fetching = true
+        fetchMsg = nil
+        Task { @MainActor in
+            do {
+                let list = try await ModelCatalog.fetch(snapshot)
+                if list.isEmpty {
+                    fetchMsg = "接口没返回模型列表，检查地址和 Key"
+                } else {
+                    p.models = list
+                    if !list.contains(p.model) { p.model = list[0] }
+                    fetchMsg = "已获取 \(list.count) 个模型"
+                }
+            } catch {
+                fetchMsg = error.localizedDescription
+            }
+            fetching = false
+        }
+    }
+
+    private static func isDefaultBase(_ s: String) -> Bool {
+        let known: Set<String> = [
+            "https://api.openai.com/v1", "https://api.anthropic.com/v1",
+            "https://openrouter.ai/api/v1", "https://api.x.ai/v1",
+            "https://generativelanguage.googleapis.com/v1beta", "https://api.kimi.com/coding/v1"
+        ]
+        return known.contains(s)
+    }
+
+    private static func isDefaultModel(_ s: String) -> Bool {
+        let known: Set<String> = [
+            "gpt-4o", "claude-sonnet-4-5", "openai/gpt-4o",
+            "grok-3", "gemini-2.5-pro", "kimi-k2"
+        ]
+        return known.contains(s)
     }
 }
