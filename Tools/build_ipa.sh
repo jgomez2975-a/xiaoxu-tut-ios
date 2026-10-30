@@ -61,14 +61,14 @@ fi
 # ---------------------------------------------------------------------------
 # 1. 内核状态判定 —— 没有 .a 也能出包，只是终端页跑不了 Linux
 # ---------------------------------------------------------------------------
-KERNEL_LIB="$ROOT/Vendor/liblinux.a"
+KERNEL_LIB="$ROOT/Vendor/libish.a"
 if [ -f "$KERNEL_LIB" ]; then
     echo "    内核  : 有（$(du -h "$KERNEL_LIB" | cut -f1)）→ 真终端模式"
     KERNEL_MODE="real"
 else
-    printf "\n\033[1;33m!! 没有 Vendor/liblinux.a，走 stub 模式\033[0m\n"
+    printf "\n\033[1;33m!! 没有 Vendor/libish.a，走 stub 模式\033[0m\n"
     echo "   工程能编、界面能用，但终端页会显示「未编译内核」。"
-    echo "   要真终端：bash Tools/build_ish.sh（首次 20-40 分钟），或加 --with-kernel"
+    echo "   要真终端：bash Tools/build_ish.sh（首次 3-8 分钟），或加 --with-kernel"
     KERNEL_MODE="stub"
 fi
 
@@ -156,11 +156,20 @@ if [ -f "$APP/alpine-rootfs.zip" ]; then
         || die "rootfs 架构与内核不匹配（见上），这个包出去也是点终端就闪退"
 fi
 
-# 4.3 真终端模式下，内核符号必须真的在可执行文件里
+# 4.3 真终端模式下，内核符号必须真的在可执行文件里。
+#     这几个是 kernel=ish 启动链的关键节点，缺哪个都活不过第一次进终端页：
+#       mount_root / become_first_process —— 内核启动
+#       do_execve / task_start             —— 起进程
+#       cpu_run_to_interrupt               —— 模拟器真正跑指令的地方
+#       npc_linux_boot                     —— 我们的胶水层入口
 EXE="$APP/$APP_NAME"
 if [ "$KERNEL_MODE" = "real" ]; then
-    for sym in _npc_linux_boot _run_kernel _actuate_kernel; do
-        if nm -gU "$EXE" 2>/dev/null | grep -q " ${sym}$"; then
+    # 用 nm -g 而不是 nm -gU：-U 只列「未定义」符号，而这些内核入口都是
+    # 已定义的，带 -U 会全部误报成缺失。
+    NM_OUT="$(nm -g "$EXE" 2>/dev/null || true)"
+    for sym in _npc_linux_boot _mount_root _become_first_process \
+               _do_execve _task_start _cpu_run_to_interrupt; do
+        if echo "$NM_OUT" | grep -q " ${sym}$"; then
             echo "    ✓ $sym"
         else
             echo "    ✗ $sym 不在 $APP_NAME 里 —— -force_load 可能没生效"

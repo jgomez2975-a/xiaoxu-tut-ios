@@ -2,7 +2,7 @@
 //  NpcLinux.h
 //  NpcLab
 //
-//  把 iSH 内核（libishkernel.a）接到 Swift 上的唯一入口。
+//  把 iSH 内核（kernel=ish，Vendor/libish.a）接到 Swift 上的唯一入口。
 //  这里是纯 C，不带任何 ObjC / UIKit 依赖，方便在 kernel 线程直接调。
 //
 

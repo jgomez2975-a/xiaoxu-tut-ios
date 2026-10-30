@@ -121,8 +121,9 @@ final class LinuxRuntime: ObservableObject {
             return
         }
 
-        // 内核是异步起的：npc_linux_boot 会等到 initcall 跑完（最多 15 秒），
-        // 再用 /bin/true 实测。真就绪 = fakefs 挂上 + chroot 成功 + 能执行。
+        // 内核在独立线程里起：npc_linux_boot 会等到 fakefs 挂载 + pid 1 exec
+        // 都做完（最多 20 秒）才返回，再用 /bin/true 实测。
+        // 真就绪 = fakefs 挂上 + 能 fork + 能执行 aarch64 二进制。
         emit(.system, "[kernel] 等待挂载 rootfs…")
         var ready = false
         for i in 0..<45 {

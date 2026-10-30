@@ -2,96 +2,131 @@
 //  NpcLinux.c
 //  NpcLab
 //
-//  iSH 内核的 App 侧胶水层。
+//  iSH 内核的 App 侧胶水层（kernel=ish 版本）。
 //
-//  iSH 编译成静态库后仍然是"半成品"——它不知道 rootfs 在哪、不知道输出给谁，
-//  还缺 4 个 Terminal_* 符号和几个 ObjC 桥。这些原本由 iSH 自己的 UIKit 终端实现，
-//  这里用一套无 UI 依赖的静态槽位顶掉，让内核能在一个纯 C 环境里跑起来。
+//  ==========================================================================
+//  为什么是 kernel=ish（改之前先读完）
+//  ==========================================================================
 //
-//  线程模型：
-//    - 内核占一个独立线程，actuate_kernel() 进去就不再出来
-//    - 所有进内核的调用都必须经 async_do_in_workqueue 排队，不能直接调
-//    - 输出回调发生在内核线程，上层要自己切主线程
+//  iSH 有两套完全不同的内核实现，meson 用 -Dkernel= 二选一：
 //
-//  三个坑（都是上一版闪退/没输出的直接原因，改之前先读完）：
-//    1. Terminal_roomForOutput 是「这一轮最多读多少字节」，不是「随便多少」。
-//       LinuxPTY.c 用 kvmalloc(PAGE_SIZE) 接数据，返回 1MB 会把内核堆写穿。
-//    2. 交互会话的 pty 必须被认出来，否则它的输出会被当成 exec 的临时输出丢掉。
-//    3. 内核 initcall 没跑完之前不能往里投 block：async_do_in_irq 的 host_write
-//       失败会 __builtin_trap()，那是 SIGILL，进程直接没。
+//    kernel=linux  真 Linux 内核。要从 ish-app/linux clone 源码，用 Kbuild 编
+//                  出几千个 .o。App 侧靠 linux/emu_asbestos.c 把内核的
+//                  pt_regs 翻译成 cpu_state —— 而这个桥接只有 x86 版本，
+//                  换 guest_arch=arm64 后 cpu_state 变成 x0..x30/sp/pc/nzcv，
+//                  cpu->eax 那一堆直接编译不过。
+//
+//    kernel=ish    内置假内核。kernel/、fs/、emu/ 自己实现 syscall / 文件系统
+//                  / 进程调度，不依赖 Linux 内核源码。产物就是 libish.a。
+//                  AzTuT（Minis）走的就是这条：它的二进制里 kernel=linux 的
+//                  符号（actuate_kernel / run_kernel / linux_start_session /
+//                  ios_pty_open / LinuxPTY / LinuxRoot / FsInitialize）一个都
+//                  没有，kernel=ish 的（mount_root / become_first_process /
+//                  do_execve / task_start / fakefs）全在。
+//
+//  ==========================================================================
+//  kernel=ish 的线程模型（跟 kernel=linux 完全不同，这是最容易踩的坑）
+//  ==========================================================================
+//
+//  kernel=linux：整个内核跑在一个线程里，所有 guest 进程都在这个线程内调度。
+//                进内核必须 async_do_in_workqueue 排队，不能直接调。
+//
+//  kernel=ish：  一个 guest 进程 = 一个宿主 pthread。
+//                  · current 是 __thread 的（kernel/task.c:12）
+//                  · task_start(task) → pthread_create，新线程里 current = task
+//                  · task_run_current() → 在当前线程直接跑 current，不新建线程
+//
+//  所以这里不需要任何"投递到内核"的队列：谁想操作内核，就在自己线程里直接调，
+//  current 由调用者自己维护（见下面 exec 里对 current 的保存/恢复）。
+//
+//  启动流程用 task_run_current() 跑 init（当前线程变成 init 的执行线程），
+//  子进程用 task_start() 各起一个线程。
+//
+//  ==========================================================================
+//  数据结构
+//  ==========================================================================
+//
+//    pid 1        /bin/sh，stdio 全接 /dev/null。它不干实际活，只作为
+//                 become_new_init_child() 的锚点存在（那个函数要 pid_get_task(1)）。
+//    console      /dev/console 的 tty driver（纯 C 实现，替代 Terminal.m 的
+//                 ios_tty_ops）。输出只进日志，不上屏。
+//    session      交互会话。pty slave 的 driver 也是我们这套 ops，输出直接
+//                 送 npc_out_cb 上屏。输入走 tty_input()。
+//    exec         非交互执行。stdout/stderr 接宿主 pipe，从 pipe 读到 EOF，
+//                 退出码靠 exit_hook 拿。
 //
 
 #include "NpcLinux.h"
-#include "LinuxInterop.h"
 
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 #include <errno.h>
-#include <dispatch/dispatch.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/select.h>
 
-// 由 deps/ish/app/LinuxPTY.c 提供（我们加的那段）
-extern int npc_pty_write(struct linux_tty *tty, const char *buf, size_t len);
+// iSH 内核内部头。这些必须在 -I deps/ish 下用 iSH 自己的宏环境展开，
+// 丢进 Xcode 的 Swift 工程里编会和 Darwin 的同名结构体撞（termios/stat/rlimit）。
+#include "kernel/fs.h"       // fs_ops / do_mount / generic_* / adhoc_fd_create
+#include "kernel/init.h"     // mount_root / become_first_process / create_stdio
+#include "kernel/calls.h"    // do_execve
+#include "kernel/task.h"     // current / task_start / task_run_current / exit_hook
+#include "kernel/signal.h"   // send_signal / SIGKILL_ / SIGINFO_NIL
+#include "kernel/errno.h"    // _EIO / _ENOMEM …
+#include "fs/devices.h"      // MEM_MAJOR / TTY_*_MAJOR / DEV_*_MINOR
+#include "fs/dev.h"          // dev_make
+#include "fs/path.h"         // AT_PWD
+#include "fs/tty.h"          // struct tty / tty_input / tty_set_winsize / DEFINE_TTY_DRIVER
+#include "fs/fd.h"           // fd_retain / fd_close
+#include "fs/real.h"         // realfs_fdops
+#include "debug.h"           // die_handler
 
-// 由 deps/ish/app/NpcBoot.c 的 late_initcall 置 1。
-// 定义放在这里（NpcBoot.c 里只有 extern），这样链接时一定有一份实体。
-volatile int npc_kernel_init_flag = 0;
+#define NPC_MAX_WAIT      8
+#define NPC_ROOT_MAX      1024
+#define NPC_ERR_MAX       512
+#define NPC_STDIO_PATH    64
 
-#define NPC_MAX_TERM 8
-#define NPC_ROOT_MAX 1024
-
-// 单次回传上限。上游 Terminal.m 的 BUF_SIZE 是 1<<14，而接收侧
-// ios_pty_output_work 的缓冲是 kvmalloc(PAGE_SIZE)。取 4KB 两种页大小都安全，
-// 代价只是多读几轮。
-#define NPC_TERM_ROOM 4096
-
-struct npc_term {
-    int used;
-    int is_session;
-    int refs;
-    unsigned seq;              // 分配序号；槽位全占时回收最老的那个
-    struct linux_tty *ltty;
-};
-
-static struct npc_term g_terms[NPC_MAX_TERM];
-static unsigned g_seq = 0;
-static nsobj_t g_session_term = NULL;
+// ---------------------------------------------------------------------------
+// 全局状态
+// ---------------------------------------------------------------------------
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t g_exec_lock = PTHREAD_MUTEX_INITIALIZER;
-// 保护「投递到内核」这一段：会话认领和 exec 不能交错，否则 exec 的临时 pty
-// 可能抢走 is_session 标记。
-static pthread_mutex_t g_post_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static npc_out_cb g_cb = NULL;
 static void *g_cb_ctx = NULL;
 
 static char g_root[NPC_ROOT_MAX];
-static char g_err[512];
-static volatile int g_booting = 0;
-static volatile int g_alive = 0;    // 内核线程已投递
-static volatile int g_ready = 0;    // 已用 /bin/true 真测过
-static volatile int g_session_dead = 0;
+static char g_err[NPC_ERR_MAX];
+
+static volatile int g_alive = 0;      // init 已经跑起来（task_run_current 之前置 1）
+static volatile int g_ready = 0;      // 已用 /bin/true 真测过
 static volatile int g_probing = 0;
+static volatile int g_boot_started = 0;   // mount + exec 都做完了
+static volatile int g_boot_err = 0;       // 启动阶段失败的错误码
 
-// 交互会话认领：spawn_session 置 want，Terminal_terminalWithType_number
-// 在创建 pty 时认领并唤醒，spawn_session 因此能返回真实结果。
-static pthread_mutex_t g_claim_m = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_claim_c = PTHREAD_COND_INITIALIZER;
-static int g_claim_want = 0;
-static int g_claim_done = 0;
+// 交互会话
+static struct tty *g_session_tty = NULL;   // pty slave（用于 tty_input / winsize）
+static int g_session_pid = 0;
+static volatile int g_session_dead = 1;
 
-// exec 期间独占的输出缓冲
-static char *g_buf = NULL;
-static size_t g_buf_len = 0;
-static size_t g_buf_cap = 0;
-static int g_capture = 0;
+// exec 等待槽位。exit_hook 在 guest 线程里跑（持有 pids_lock），
+// 这里只用我们自己的锁，绝不能碰 pids_lock，否则死锁。
+struct npc_wait {
+    int used;
+    int pid;
+    int done;
+    int code;
+};
+static struct npc_wait g_waits[NPC_MAX_WAIT];
+static pthread_mutex_t g_wait_m = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_wait_c = PTHREAD_COND_INITIALIZER;
 
-static const char *kVersion = "iSH 内核 / NpcLab 集成层 1.2";
+static const char *kVersion = "iSH ARM64 内核 / NpcLab 集成层 2.0 (kernel=ish)";
 
 // ---------------------------------------------------------------------------
 // 小块工具
@@ -103,230 +138,384 @@ static void set_err(const char *msg) {
     pthread_mutex_unlock(&g_lock);
 }
 
-static int buf_append(const char *data, size_t len) {
-    if (g_buf_len + len + 1 > g_buf_cap) {
-        size_t want = (g_buf_cap ? g_buf_cap * 2 : 8192);
-        while (want < g_buf_len + len + 1) want *= 2;
-        char *p = realloc(g_buf, want);
-        if (!p) return -1;
-        g_buf = p;
-        g_buf_cap = want;
-    }
-    memcpy(g_buf + g_buf_len, data, len);
-    g_buf_len += len;
-    g_buf[g_buf_len] = 0;
+// iSH 的 die() 是 noreturn：默认 handler 打印完就 abort()。我们接管它。
+//
+// 不能 abort —— 那会把整个 App 带走，用户只看到闪退什么都不知道。
+// 用 pthread_exit 让**当前内核线程**退出：错误留在 g_err 里，上层还能显示。
+// （die 的调用点几乎都在 guest 线程或 boot 线程，pthread_exit 能干净退出。）
+static void npc_die_handler(const char *msg) {
+    set_err(msg ? msg : "kernel die");
+    fprintf(stderr, "NpcLab: kernel die: %s\n", msg ? msg : "");
+    pthread_exit(NULL);
+}
+
+// ---------------------------------------------------------------------------
+// 纯 C 的 tty driver
+//
+// 替代 app/Terminal.m 里那段 ObjC 的 ios_tty_ops。kernel=ish 的 tty 接口就三个
+//  回调：init / write / cleanup。
+//
+//  方向要搞清楚（很容易反）：
+//    driver->ops->write  ← guest 往 tty 写（输出），由 fs/tty.c:tty_write() 调
+//    tty_input(tty, ...) ← App 往 guest 送键盘（输入），我们直接调
+// ---------------------------------------------------------------------------
+
+struct npc_tty {
+    int num;
+    int is_console;
+};
+
+static int npc_tty_init(struct tty *tty) {
+    struct npc_tty *t = calloc(1, sizeof(*t));
+    if (!t)
+        return _ENOMEM;
+    t->num = (int) tty->num;
+    t->is_console = (tty->type == TTY_CONSOLE_MAJOR);
+    tty->data = t;
     return 0;
 }
 
-// 指针是不是我们这 8 个槽位里的一个。内核只可能把它自己拿到的指针还回来，
-// 但 objc_put 传 NULL 也得接住。
-static int term_index(nsobj_t o) {
-    uintptr_t p = (uintptr_t) o;
-    uintptr_t lo = (uintptr_t) &g_terms[0];
-    uintptr_t hi = (uintptr_t) &g_terms[NPC_MAX_TERM];
-    if (p < lo || p >= hi) return -1;
-    if ((p - lo) % sizeof(struct npc_term) != 0) return -1;
-    return (int) ((p - lo) / sizeof(struct npc_term));
+static int npc_tty_write(struct tty *tty, const void *buf, size_t len, bool blocking) {
+    (void) blocking;
+    if (!buf || len == 0)
+        return 0;
+
+    struct npc_tty *t = tty->data;
+
+    // console 的输出（pid 1 那套）只留在日志里，别混进终端页。
+    // 终端页显示的是 session 的 pty slave。
+    if (t && t->is_console)
+        return (int) len;
+
+    npc_out_cb cb = g_cb;
+    void *ctx = g_cb_ctx;
+    if (cb)
+        cb((const char *) buf, (int) len, ctx);
+    return (int) len;
 }
 
+static void npc_tty_cleanup(struct tty *tty) {
+    free(tty->data);
+    tty->data = NULL;
+}
+
+static const struct tty_driver_ops npc_tty_ops = {
+    .init = npc_tty_init,
+    .write = npc_tty_write,
+    .cleanup = npc_tty_cleanup,
+    // .open / .close / .ioctl 故意留空：
+    //   open  空着 → 不用检查 pty 的 locked 标志（pty_slave_open 才会检查，
+    //                而 pty_open_fake 默认把 slave 设成 locked，走那条路会 EIO）
+    //   ioctl 空着 → TIOCSWINSZ 之类落到 tty.c 的通用实现
+};
+
+// console 驱动必须注册进 tty_drivers[]，create_stdio("/dev/console") 会查它
+DEFINE_TTY_DRIVER(npc_console_driver, &npc_tty_ops, TTY_CONSOLE_MAJOR, 64);
+
+// pty slave 的驱动。不注册到 tty_drivers[]（那个位置留给 pty_slave），
+// 只作为 pty_open_fake() 的参数传进去 —— pty_open_fake 会把 ttys 表指向
+// pty_slave.ttys，于是 /dev/pts/N 打开时拿到的是我们这套 ops。
+static struct tty_driver npc_pty_driver = {
+    .ops = &npc_tty_ops,
+};
+
 // ---------------------------------------------------------------------------
-// iSH 缺的符号：终端
+// exit_hook：guest 进程退出时被调（kernel/exit.c:222）
 //
-// 内核调这 4 个函数时认为对面是一个 UIKit 终端对象。我们给的是一个 8 槽的
-// 静态数组；引用计数照 iSH 的 objc_get/objc_put 走，pty 关掉就能回收，
-// 不会像上一版那样 8 次 exec 之后开始覆盖还活着的槽。
+// 注意调用点持有 pids_lock，这里绝对不能调任何要 pids_lock 的东西
+// （pid_get_task / send_signal / task_* 全都不行）。只做记录 + 唤醒。
 // ---------------------------------------------------------------------------
 
-nsobj_t Terminal_terminalWithType_number(int type, int number) {
-    (void) type;
-    (void) number;
+static void npc_exit_hook(struct task *task, int code) {
+    int pid = (int) task->pid;
 
-    int claimed = 0;
-
-    pthread_mutex_lock(&g_lock);
-    int idx = -1;
-    for (int i = 0; i < NPC_MAX_TERM; i++) {
-        if (!g_terms[i].used) { idx = i; break; }
-    }
-    if (idx < 0) {
-        // 全占着（理论上 pty 会正常 HUP 回收，这里是兜底）：
-        // 挑引用最少、分配最早的回收，别让新 pty 拿不到槽。
-        idx = 0;
-        for (int i = 1; i < NPC_MAX_TERM; i++) {
-            if (g_terms[i].refs < g_terms[idx].refs ||
-                (g_terms[i].refs == g_terms[idx].refs &&
-                 g_terms[i].seq < g_terms[idx].seq)) {
-                idx = i;
-            }
+    // 1. 唤醒 exec 的等待者。这里只碰 g_wait_m。
+    pthread_mutex_lock(&g_wait_m);
+    for (int i = 0; i < NPC_MAX_WAIT; i++) {
+        if (g_waits[i].used && g_waits[i].pid == pid) {
+            g_waits[i].done = 1;
+            g_waits[i].code = code;
+            break;
         }
     }
+    pthread_cond_broadcast(&g_wait_c);
+    pthread_mutex_unlock(&g_wait_m);
 
-    struct npc_term *t = &g_terms[idx];
-    memset(t, 0, sizeof(*t));
-    t->used = 1;
-    t->refs = 1;
-    t->seq = ++g_seq;
-
-    if (g_claim_want) {
-        t->is_session = 1;
-        g_session_term = t;
-        g_session_dead = 0;
-        claimed = 1;
-    }
-    pthread_mutex_unlock(&g_lock);
-
-    if (claimed) {
-        pthread_mutex_lock(&g_claim_m);
-        g_claim_done = 1;
-        pthread_cond_broadcast(&g_claim_c);
-        pthread_mutex_unlock(&g_claim_m);
-    }
-
-    return (nsobj_t) t;
-}
-
-int Terminal_roomForOutput(nsobj_t _self) {
-    (void) _self;
-    // 必须 ≤ 接收端缓冲区。返回大值 = 内核往 4KB 的 kvmalloc 里写 1MB = 崩。
-    return NPC_TERM_ROOM;
-}
-
-int Terminal_sendOutput_length(nsobj_t _self, const char *data, int size) {
-    if (!data || size <= 0) return 0;
-
-    struct npc_term *t = (struct npc_term *) _self;
-    int is_session = (t && t->is_session) || _self == g_session_term;
-
-    int captured = 0;
-    if (!is_session && g_capture) {
-        pthread_mutex_lock(&g_exec_lock);
-        if (g_capture) captured = (buf_append(data, (size_t) size) == 0);
-        pthread_mutex_unlock(&g_exec_lock);
-    }
-
-    // 交互会话的输出直接上屏；exec 的输出只进缓冲，避免污染终端
-    if (is_session && !captured) {
-        npc_out_cb cb = g_cb;
-        void *ctx = g_cb_ctx;
-        if (cb) cb(data, size, ctx);
-    }
-    return size;
-}
-
-void Terminal_setLinuxTTY(nsobj_t _self, struct linux_tty *tty) {
-    int i = term_index(_self);
-    if (i < 0) return;
+    // 2. 会话状态归 g_lock 管。两把锁不嵌套，避免和 session_tty_retain
+    //    （g_lock → tty->lock）凑出环。
     pthread_mutex_lock(&g_lock);
-    g_terms[i].ltty = tty;
+    if (g_session_pid != 0 && pid == g_session_pid) {
+        g_session_dead = 1;
+        // 进程退出后三个 stdio fd 会被关，pty slave 的 refcount 归零 →
+        // 内核 free(tty)。这里必须清指针，否则 session_write 会拿着悬垂
+        // 指针去 tty_input。已经 retain 住的调用方不受影响（refcount 还 >0）。
+        g_session_tty = NULL;
+        g_session_pid = 0;
+    }
     pthread_mutex_unlock(&g_lock);
 }
 
-// ---------------------------------------------------------------------------
-// iSH 缺的符号：内核回话
-// ---------------------------------------------------------------------------
-
-const char *DefaultRootPath(void) {
-    return g_root;
-}
-
-void ConsoleLog(const char *data, unsigned len) {
-    if (!g_cb || !data || len == 0) return;
-    g_cb(data, (int) len, g_cb_ctx);
-}
-
-void ReportPanic(const char *message) {
-    set_err(message ? message : "kernel panic");
-    if (g_cb && message) {
-        size_t n = strlen(message);
-        g_cb(message, (int) n, g_cb_ctx);
+// 占一个等待槽位。调用方必须在 task_start 之前 arm，避免进程跑太快退出时
+// exit_hook 找不到对应槽位。
+static int wait_alloc(int pid) {
+    pthread_mutex_lock(&g_wait_m);
+    int slot = -1;
+    for (int i = 0; i < NPC_MAX_WAIT; i++) {
+        if (!g_waits[i].used) { slot = i; break; }
     }
-}
-
-// iSH 用 ObjC 引用计数管终端对象。我们的终端是静态结构，但计数必须真算：
-// pty 关闭时 ios_pty_cleanup 会 objc_put，槽位靠这个回收。
-nsobj_t objc_get(nsobj_t object) {
-    int i = term_index(object);
-    if (i >= 0) {
-        pthread_mutex_lock(&g_lock);
-        if (g_terms[i].used) g_terms[i].refs++;
-        pthread_mutex_unlock(&g_lock);
+    if (slot >= 0) {
+        g_waits[slot].used = 1;
+        g_waits[slot].pid = pid;
+        g_waits[slot].done = 0;
+        g_waits[slot].code = -1;
     }
-    return object;
+    pthread_mutex_unlock(&g_wait_m);
+    return slot;
 }
 
-void objc_put(nsobj_t object) {
-    int i = term_index(object);
-    if (i < 0) return;
+static void wait_free(int slot) {
+    if (slot < 0) return;
+    pthread_mutex_lock(&g_wait_m);
+    g_waits[slot].used = 0;
+    pthread_mutex_unlock(&g_wait_m);
+}
 
-    pthread_mutex_lock(&g_lock);
-    struct npc_term *t = &g_terms[i];
-    if (t->used && t->refs > 0) t->refs--;
-    if (t->used && t->refs == 0) {
-        if (g_session_term == object) {
-            g_session_term = NULL;
-            g_session_dead = 1;
+// 等槽位就绪。deadline 是 CLOCK_REALTIME 绝对时间；返回 1 拿到结果 / 0 超时
+static int wait_for(int slot, const struct timespec *deadline) {
+    if (slot < 0) return 0;
+    int ok = 0;
+    pthread_mutex_lock(&g_wait_m);
+    while (!g_waits[slot].done) {
+        if (deadline == NULL) {
+            pthread_cond_wait(&g_wait_c, &g_wait_m);
+        } else if (pthread_cond_timedwait(&g_wait_c, &g_wait_m, deadline) == ETIMEDOUT) {
+            break;
         }
-        t->used = 0;
-        t->is_session = 0;
-        t->ltty = NULL;
     }
-    pthread_mutex_unlock(&g_lock);
+    if (g_waits[slot].done) {
+        ok = 1;
+        g_waits[slot].done = 2;   // 交回结果，避免重复取
+    }
+    pthread_mutex_unlock(&g_wait_m);
+    return ok;
 }
 
-// 内核里两个可选的剪贴板/NSData 通道，LinuxPTY 不强制用，给空实现占位
-nsobj_t UIPasteboard_get(void) { return NULL; }
-long UIPasteboard_changeCount(void) { return 0; }
-void UIPasteboard_set(const char *data, size_t len) { (void) data; (void) len; }
-size_t NSData_length(nsobj_t data) { (void) data; return 0; }
-const void *NSData_bytes(nsobj_t data) { (void) data; return NULL; }
+static int wait_code(int slot) {
+    if (slot < 0) return -1;
+    pthread_mutex_lock(&g_wait_m);
+    int c = g_waits[slot].code;
+    pthread_mutex_unlock(&g_wait_m);
+    return c;
+}
+
+static void deadline_from_now(struct timespec *ts, double seconds) {
+    clock_gettime(CLOCK_REALTIME, ts);
+    if (seconds <= 0) return;
+    ts->tv_sec += (time_t) seconds;
+    ts->tv_nsec += (long) ((seconds - (double) (time_t) seconds) * 1e9);
+    if (ts->tv_nsec >= 1000000000L) {
+        ts->tv_sec += 1;
+        ts->tv_nsec -= 1000000000L;
+    }
+}
 
 // ---------------------------------------------------------------------------
-// 启动
+// 环境变量
+//
+// 格式跟 do_execve 的要求一致：NUL 分隔，末尾双 NUL。数组字面量的最后一个
+// "\0" 保证双 NUL 结尾。
 // ---------------------------------------------------------------------------
+
+static const char kEnv[] =
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
+    "HOME=/root\0"
+    "TERM=xterm-256color\0"
+    "LANG=C.UTF-8\0"
+    "SHELL=/bin/sh\0"
+    "ENV=/etc/profile\0"
+    "PYTHONMALLOC=malloc\0"   // ARM64 guest：V8/CPython 在这套模拟器上更稳
+    "\0";
+
+// ---------------------------------------------------------------------------
+// 设备节点 / 挂载点
+//
+// 全在 fakefs 上，写一次就永久留在 meta.db 里，重复 mknod 会返回 EEXIST，
+// 忽略即可。所以这里不判返回值。
+// ---------------------------------------------------------------------------
+
+static void make_device_nodes(void) {
+    const struct { const char *path; int major; int minor; } devs[] = {
+        {"/dev/null",    MEM_MAJOR,           DEV_NULL_MINOR},
+        {"/dev/zero",    MEM_MAJOR,           DEV_ZERO_MINOR},
+        {"/dev/full",    MEM_MAJOR,           DEV_FULL_MINOR},
+        {"/dev/random",  MEM_MAJOR,           DEV_RANDOM_MINOR},
+        {"/dev/urandom", MEM_MAJOR,           DEV_URANDOM_MINOR},
+        {"/dev/tty",     TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR},
+        {"/dev/console", TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR},
+        {"/dev/ptmx",    TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR},
+        {"/dev/tty1",    TTY_CONSOLE_MAJOR,   1},
+    };
+    for (size_t i = 0; i < sizeof(devs) / sizeof(devs[0]); i++)
+        generic_mknodat(AT_PWD, devs[i].path, S_IFCHR | 0666,
+                        dev_make(devs[i].major, devs[i].minor));
+
+    generic_mkdirat(AT_PWD, "/dev", 0755);
+    generic_mkdirat(AT_PWD, "/dev/pts", 0755);
+    generic_mkdirat(AT_PWD, "/proc", 0755);
+    generic_mkdirat(AT_PWD, "/tmp", 01777);
+}
+
+// 把宿主 fd 包成 guest 的 struct fd。
+// 注意 realfs_fdops 直接接管这个 host fd —— 不要在包完之后再 close 它。
+static struct fd *wrap_host_fd(int host_fd) {
+    struct fd *fd = adhoc_fd_create(&realfs_fdops);
+    if (!fd) return NULL;
+    fd->real_fd = host_fd;
+    fd->flags = O_RDWR_;
+    // guest 侧 stat 填成 pipe，免得 libuv/Node 把 stdout 当成 socket 后拒绝初始化
+    fd->stat.mode = S_IFIFO | 0600;
+    return fd;
+}
+
+// ---------------------------------------------------------------------------
+// 内核启动
+//
+// 流程照抄 xX_main_Xx.h（CLI 的纯 C 启动路径），顺序不能乱：
+//   mount_root → become_first_process → 设备节点 → exec → console → task_run
+//
+// 为什么 exec 在 create_stdio 之前：xX_main_Xx.h 就是这么排的，
+// create_stdio 之后会重新填 fd 0/1/2，覆盖 exec 继承下来的那套。
+// ---------------------------------------------------------------------------
+
+// 启动阶段要用的 rootfs 数据目录（<rootfs>/data），由 boot 传进来
+static char g_data_dir[NPC_ROOT_MAX];
 
 static void *kernel_main(void *arg) {
     (void) arg;
-    // 不返回：内核在自己线程里调度，退出即崩
-    actuate_kernel("");
-    set_err("kernel 意外退出");
+
+    // ---- 1. 挂 fakefs ----
+    // fakefs 的 fs_ops 要的是「含 data/ 和 meta.db 的那个目录 + /data」，
+    // 不是 rootfs 根目录本身。传错就是 meta.db 找不到 → 挂载失败。
+    int err = mount_root(&fakefs, g_data_dir);
+    if (err < 0) {
+        set_err("fakefs 挂载失败：检查 rootfs 下是否有 meta.db 和 data/");
+        g_boot_err = err;
+        goto boot_done;
+    }
+
+    // ---- 2. 变成 pid 1 之前的第一个进程 ----
+    err = become_first_process();
+    if (err < 0) {
+        set_err("become_first_process 失败");
+        g_boot_err = err;
+        goto boot_done;
+    }
+    // 把 init task 绑到本线程（task_run_current 会在本线程跑它）
+    current->thread = pthread_self();
+
+    // ---- 3. 设备节点 + 伪文件系统 ----
+    make_device_nodes();
+    do_mount(&procfs, "proc", "/proc", "", 0);
+    do_mount(&devptsfs, "devpts", "/dev/pts", "", 0);
+
+    // ---- 4. console ----
+    // 必须在 create_stdio 之前注册，create_stdio 会 dev_open(TTY_CONSOLE_MAJOR, 1)
+    tty_drivers[TTY_CONSOLE_MAJOR] = &npc_console_driver;
+    set_console_device(TTY_CONSOLE_MAJOR, 1);
+
+    // ---- 5. exec pid 1 ----
+    // pid 1 只用来看家：become_new_init_child() 要 pid_get_task(1)，
+    // 没有它连子进程都起不来。stdio 接 /dev/null，别让它的输出干扰终端页。
+    {
+        struct fd *nullfd = generic_open("/dev/null", O_RDWR_, 0);
+        if (!IS_ERR(nullfd)) {
+            current->files->files[0] = fd_retain(nullfd);
+            current->files->files[1] = fd_retain(nullfd);
+            current->files->files[2] = fd_retain(nullfd);
+            fd_close(nullfd);
+        }
+    }
+
+    // pid 1 只用来看家：become_new_init_child() 要 pid_get_task(1)，没有它连
+    // 子进程都起不来。所以让它常驻但不干活 —— 每 3600 秒醒一次重新睡，
+    // 避免 sleep 参数过大被 busybox 拒绝。
+    static const char kInitArgv[] =
+        "/bin/sh\0-c\0trap 'exit 0' TERM INT; while :; do sleep 3600; done\0";
+    err = do_execve("/bin/sh", 3, kInitArgv, kEnv);
+    if (err < 0) {
+        set_err("exec pid 1 失败：rootfs 里的 /bin/sh 可能不是 aarch64");
+        g_boot_err = err;
+        goto boot_done;
+    }
+
+    exit_hook = npc_exit_hook;
+    die_handler = npc_die_handler;
+
+    g_alive = 1;
+    g_boot_err = 0;
+
+boot_done:
+    g_boot_started = 1;
+
+    if (g_boot_err != 0) {
+        // 启动失败就别进 task_run_current（那会 die）
+        return NULL;
+    }
+
+    // ---- 6. 在当前线程跑 init ----
+    // 这个函数不返回（除非 guest 进程退出），所以 kernel_main 走到这里就
+    // 一直占着这个线程当 pid 1 的执行线程。
+    task_run_current();
+
     g_alive = 0;
-    g_booting = 0;
+    set_err("task_run_current 意外返回");
     return NULL;
 }
 
 int npc_linux_boot(const char *rootfsPath) {
-    if (g_booting || g_alive) return 0;
+    if (g_alive || g_boot_started) return 0;
     if (!rootfsPath || !*rootfsPath) return -1;
 
-    size_t n = strlen(rootfsPath);
-    if (n >= NPC_ROOT_MAX) return -2;
-    memcpy(g_root, rootfsPath, n + 1);
+    // 传进来的是 <...>/alpine-rootfs（含 meta.db + data/），
+    // fakefs 要的是它下面的 data 子目录
+    int n = snprintf(g_data_dir, sizeof(g_data_dir), "%s/data", rootfsPath);
+    if (n < 0 || (size_t) n >= sizeof(g_data_dir)) return -2;
 
-    g_booting = 1;
+    // 校验 rootfs 结构，早点报错比在 kernel 里 die 好
+    char probe[NPC_ROOT_MAX];
+    snprintf(probe, sizeof(probe), "%s/meta.db", rootfsPath);
+    if (access(probe, R_OK) != 0) {
+        set_err("rootfs 下没有 meta.db —— 解压目录不对");
+        return -2;
+    }
+
+    n = snprintf(g_root, sizeof(g_root), "%s", rootfsPath);
+    if (n < 0 || (size_t) n >= sizeof(g_root)) return -2;
+
+    g_boot_started = 0;
+    g_boot_err = 0;
+
     pthread_t th;
     if (pthread_create(&th, NULL, kernel_main, NULL) != 0) {
-        g_booting = 0;
         set_err("内核线程创建失败");
         return -3;
     }
     pthread_detach(th);
-    g_alive = 1;
-    g_booting = 0;
 
-    // 等 initcall 跑完再返回。call_block_init 是 subsys_initcall，它没跑之前
-    // block_request_write 还是 0，async_do_in_irq 里 host_write 会失败并
-    // __builtin_trap()——那是 SIGILL，App 直接闪退，什么日志都留不下。
-    int ok = 0;
-    for (int i = 0; i < 300; i++) {          // 最多 15 秒
-        if (npc_kernel_init_flag) { ok = 1; break; }
+    // 等 mount + exec 做完。给 20 秒（fakefs 首次打开 meta.db 要建索引，慢）。
+    for (int i = 0; i < 400; i++) {
+        if (g_boot_started) break;
         usleep(50 * 1000);
     }
-    if (!ok) {
-        set_err("内核 initcall 15 秒内没跑完，rootfs 可能没挂上");
+    if (!g_boot_started) {
+        set_err("内核 20 秒内没启动完成");
         return -4;
     }
-    // 再给 pid 1 一点时间起来，让 IRQ 有人收
-    usleep(300 * 1000);
+    if (g_boot_err != 0)
+        return -5;
+
+    // 再给子进程调度一点余量，然后放行
+    usleep(100 * 1000);
     return 0;
 }
 
@@ -334,19 +523,14 @@ int npc_linux_boot(const char *rootfsPath) {
 int npc_linux_ready(void) {
     if (!g_alive) return 0;
     if (g_ready) return 1;
-    if (!npc_kernel_init_flag) return 0;   // 还没初始化完，碰它会 trap
-
     if (g_probing) return 0;
+
     g_probing = 1;
-
     char *out = NULL;
-    int n = 0, rc = -1;
-    // /bin/true 在 Alpine 里是 busybox 软链；能执行说明 fakefs 挂上了、chroot 成功了
-    if (npc_linux_exec("true", 2.5, &out, &n, &rc) == 0 && rc == 0) {
+    int len = 0, rc = -1;
+    if (npc_linux_exec("true", 3.0, &out, &len, &rc) == 0 && rc == 0)
         g_ready = 1;
-    }
     if (out) free(out);
-
     g_probing = 0;
     return g_ready;
 }
@@ -365,251 +549,316 @@ const char *npc_linux_root_path(void) { return g_root; }
 const char *npc_linux_version(void) { return kVersion; }
 
 // ---------------------------------------------------------------------------
-// 执行
+// 非交互执行
+//
+// 模型（照抄 app/ISHShellExecutor.m 的 kernel=ish 分支）：
+//   become_new_init_child() → 装 stdio（stdout/stderr 接宿主 pipe）
+//   → do_execve → task_start → 从 pipe 读到 EOF → 等 exit_hook 拿退出码
+//
+// 注意 current 是 thread-local。become_new_init_child() 会把**本线程**的
+// current 设成新 task，task_start 之后必须恢复，否则 App 线程后续任何
+// 内核调用都会拿着一个已经在跑的 task，行为不可预测。
 // ---------------------------------------------------------------------------
 
-// 注意：这个结构必须堆分配。超时返回后内核那边的回调仍持有它，
-// 放栈上会在函数退栈后被当成有效指针写，直接崩。
-struct exec_wait {
-    pthread_mutex_t m;
-    pthread_cond_t c;
-    int done;
-    int rc;
-    int abandoned;          // 超时后置 1，由回调负责回收
-    char *cmd;              // 命令副本，生命周期同本结构
-    const char *argv[4];
-};
+// 从 pipe 读到 EOF 或超时。返回读到的字节数，-1 表示超时前没读到 EOF。
+static int drain_pipe(int rfd, char **out, size_t *outLen, const struct timespec *deadline) {
+    size_t cap = 8192, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) return -1;
+    buf[0] = 0;
 
-// 回调统一入口：谁最后持有谁回收
-static void exec_finish(struct exec_wait *w, int rc) {
-    pthread_mutex_lock(&w->m);
-    w->rc = rc;
-    w->done = 1;
-    int orphan = w->abandoned;
-    pthread_cond_signal(&w->c);
-    pthread_mutex_unlock(&w->m);
+    for (;;) {
+        struct timeval tv;
+        if (deadline) {
+            struct timespec now;
+            clock_gettime(CLOCK_REALTIME, &now);
+            long long us = (long long)(deadline->tv_sec - now.tv_sec) * 1000000LL
+                         + (deadline->tv_nsec - now.tv_nsec) / 1000;
+            if (us <= 0) { free(buf); return -1; }
+            tv.tv_sec = (time_t)(us / 1000000);
+            tv.tv_usec = (suseconds_t)(us % 1000000);
+        } else {
+            tv.tv_sec = 1;
+            tv.tv_usec = 0;
+        }
 
-    if (orphan) {
-        pthread_mutex_destroy(&w->m);
-        pthread_cond_destroy(&w->c);
-        free(w->cmd);
-        free(w);
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(rfd, &rfds);
+        int sel = select(rfd + 1, &rfds, NULL, NULL, &tv);
+        if (sel < 0) {
+            if (errno == EINTR) continue;
+            free(buf);
+            return -1;
+        }
+        if (sel == 0) {
+            if (deadline) { free(buf); return -1; }
+            continue;
+        }
+
+        if (len + 4096 + 1 > cap) {
+            size_t want = cap * 2;
+            while (want < len + 4096 + 1) want *= 2;
+            char *p = realloc(buf, want);
+            if (!p) { free(buf); return -1; }
+            buf = p;
+            cap = want;
+        }
+        ssize_t got = read(rfd, buf + len, cap - len - 1);
+        if (got < 0) {
+            if (errno == EINTR || errno == EAGAIN) continue;
+            break;
+        }
+        if (got == 0) break;   // EOF
+        len += (size_t) got;
     }
+
+    buf[len] = 0;
+    *out = buf;
+    *outLen = len;
+    return (int) len;
 }
 
-static const char *kEnv[] = {
-    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    "HOME=/root",
-    "TERM=xterm-256color",
-    "LANG=C.UTF-8",
-    "SHELL=/bin/sh",
-    // 交互式 sh 会读 $ENV —— 这样不用 -l 也能让 /etc/profile 生效，
-    // 拿到 PS1 和 motd，同时避开 login shell 那一串额外初始化。
-    "ENV=/etc/profile",
-    NULL
-};
+// 超时后把 guest 进程干掉。每个 guest 进程占着 ~350KB 的 TLB + fiber_frame，
+// 不杀的话反复超时会一路吃内存（iSH 的 exit.c 注释里也强调了这点）。
+static void npc_kill_pid(int pid) {
+    if (pid <= 0) return;
+    lock(&pids_lock);
+    struct task *task = pid_get_task((dword_t) pid);
+    if (task != NULL)
+        send_signal(task, SIGKILL_, SIGINFO_NIL);
+    unlock(&pids_lock);
+}
 
 int npc_linux_exec(const char *cmd, double timeout,
                    char **out, int *outLen, int *exitCode) {
     if (!cmd) return -1;
     if (!g_alive) return -1;
-    if (!npc_kernel_init_flag) return -1;
 
-    struct exec_wait *w = calloc(1, sizeof(*w));
-    if (!w) return -3;
-    pthread_mutex_init(&w->m, NULL);
-    pthread_cond_init(&w->c, NULL);
-    w->rc = -1;
-    w->cmd = strdup(cmd);
-    if (!w->cmd) {
-        pthread_mutex_destroy(&w->m);
-        pthread_cond_destroy(&w->c);
-        free(w);
+    int p[2];
+    if (pipe(p) < 0) return -3;
+    fcntl(p[0], F_SETFL, O_NONBLOCK);
+
+    struct timespec deadline;
+    deadline_from_now(&deadline, timeout);
+
+    struct task *saved = current;      // App 线程这里是 NULL
+    if (become_new_init_child() < 0) {
+        close(p[0]); close(p[1]);
+        current = saved;
         return -3;
     }
-    w->argv[0] = "/bin/sh";
-    w->argv[1] = "-c";
-    w->argv[2] = w->cmd;
-    w->argv[3] = NULL;
+    struct task *task = current;
+    int pid = (int) task->pid;
 
-    pthread_mutex_lock(&g_exec_lock);
-    g_buf_len = 0;
-    if (g_buf) g_buf[0] = 0;
-    g_capture = 1;
-    pthread_mutex_unlock(&g_exec_lock);
-
-    // block 捕获 w（堆），不捕获任何栈变量
-    pthread_mutex_lock(&g_post_lock);
-    async_do_in_workqueue(^{
-        linux_start_session("/bin/sh", w->argv, kEnv, ^(int retval, int pid, nsobj_t terminal) {
-            (void) pid;
-            (void) terminal;
-            // 命令结束不等于输出写完，LinuxPTY 的 flush 可能晚一拍；
-            // 给内核线程 30ms 把最后一段吐出来再收口。
-            struct timespec gap = { .tv_sec = 0, .tv_nsec = 30 * 1000 * 1000 };
-            nanosleep(&gap, NULL);
-            exec_finish(w, retval);
-        });
-    });
-    pthread_mutex_unlock(&g_post_lock);
-
-    int timedOut = 0;
-    pthread_mutex_lock(&w->m);
-    if (timeout > 0) {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += (time_t) timeout;
-        ts.tv_nsec += (long) ((timeout - (double) (time_t) timeout) * 1e9);
-        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }
-        while (!w->done) {
-            if (pthread_cond_timedwait(&w->c, &w->m, &ts) == ETIMEDOUT) {
-                if (!w->done) { timedOut = 1; w->abandoned = 1; }
-                break;
-            }
-        }
-    } else {
-        while (!w->done) pthread_cond_wait(&w->c, &w->m);
+    // stdin = /dev/null
+    int nullfd = open("/dev/null", O_RDONLY);
+    if (nullfd >= 0) {
+        struct fd *in = wrap_host_fd(nullfd);
+        if (in) task->files->files[0] = in;
+        else close(nullfd);
     }
-    int finalRc = w->rc;
-    pthread_mutex_unlock(&w->m);
 
-    pthread_mutex_lock(&g_exec_lock);
-    g_capture = 0;
-    size_t n = g_buf_len;
-    char *copy = NULL;
-    if (n > 0) {
-        copy = malloc(n + 1);
-        if (copy) { memcpy(copy, g_buf, n); copy[n] = 0; }
-    } else {
-        copy = malloc(1);
-        if (copy) copy[0] = 0;
+    // stdout / stderr = pipe 写端。
+    // 必须各 dup 一份：wrap_host_fd 是「接管」语义，fd 关闭时会 close 掉
+    // real_fd。如果直接把 p[1] 交给 fd，父进程再 close(p[1]) 就会让 guest
+    // 手里的 fd 变成 EBADF；反过来不 close(p[1]) 又永远等不到 EOF。
+    int o_fd = dup(p[1]);
+    struct fd *o = (o_fd >= 0) ? wrap_host_fd(o_fd) : NULL;
+    if (o) task->files->files[1] = o; else if (o_fd >= 0) close(o_fd);
+    int e_fd = dup(p[1]);
+    struct fd *e = (e_fd >= 0) ? wrap_host_fd(e_fd) : NULL;
+    if (e) task->files->files[2] = e; else if (e_fd >= 0) close(e_fd);
+
+    // argv："/bin/sh\0-c\0<cmd>\0\0"
+    size_t need = strlen(cmd) + 32;
+    char *argvBuf = malloc(need);
+    if (!argvBuf) {
+        close(p[0]); close(p[1]);
+        current = saved;
+        return -3;
     }
-    pthread_mutex_unlock(&g_exec_lock);
+    size_t pos = 0;
+    memcpy(argvBuf + pos, "/bin/sh", 8); pos += 8;
+    memcpy(argvBuf + pos, "-c", 3);      pos += 3;
+    size_t clen = strlen(cmd) + 1;
+    memcpy(argvBuf + pos, cmd, clen);    pos += clen;
+    argvBuf[pos] = 0;
 
+    int err = do_execve("/bin/sh", 3, argvBuf, kEnv);
+    free(argvBuf);
+    if (err < 0) {
+        close(p[0]); close(p[1]);
+        current = saved;
+        return -3;
+    }
+
+    // 先 arm 再 start：进程可能瞬间就退出，exit_hook 来早了就收不到
+    int slot = wait_alloc(pid);
+    task_start(task);
+    current = saved;                   // 恢复 App 线程的 current（NULL）
+
+    // 父进程必须关掉写端，否则 read 永远等不到 EOF
+    close(p[1]);
+
+    char *body = NULL;
+    size_t bodyLen = 0;
+    int drainRc = drain_pipe(p[0], &body, &bodyLen, timeout > 0 ? &deadline : NULL);
+    close(p[0]);
+
+    int timedOut = (drainRc < 0);
+    int rc = -1;
     if (!timedOut) {
-        pthread_mutex_destroy(&w->m);
-        pthread_cond_destroy(&w->c);
-        free(w->cmd);
-        free(w);
+        if (wait_for(slot, timeout > 0 ? &deadline : NULL))
+            rc = wait_code(slot);
+        else
+            timedOut = 1;
     }
-    // 超时分支不碰 w：所有权已交给回调
+    wait_free(slot);
 
-    if (out) *out = copy;
-    if (outLen) *outLen = (int) n;
-    if (exitCode) *exitCode = timedOut ? -1 : finalRc;
+    if (!body) {
+        body = malloc(1);
+        bodyLen = 0;
+    }
+    if (body) body[bodyLen] = 0;
 
-    if (timedOut) return -2;
+    if (out) *out = body; else free(body);
+    if (outLen) *outLen = (int) bodyLen;
+    if (exitCode) *exitCode = timedOut ? -1 : rc;
+
+    if (timedOut) {
+        set_err("命令超时");
+        npc_kill_pid(pid);   // 别把进程留在后台吃内存
+        return -2;
+    }
     return 0;
 }
 
 void npc_linux_free(char *p) { free(p); }
 
 // ---------------------------------------------------------------------------
-// iSH 的 async_do_in_ios
-// ---------------------------------------------------------------------------
-// 原实现在 deps/ish/app/IOSCalls.m，但它 #include <UIKit/UIKit.h> 和 Roots.h，
-// 而我们这里只需要一行 dispatch_async，没必要为了一个函数把 UIKit 那套拖进来。
-// LinuxInterop.o 和 LinuxTTY.o 都引用它（panic 上报、tty 销毁时切主线程）。
-void async_do_in_ios(void (^block)(void)) {
-    dispatch_async(dispatch_get_main_queue(), block);
-}
-
-// ---------------------------------------------------------------------------
-// iSH 的 FsInitialize
-// ---------------------------------------------------------------------------
-// LinuxRoot.c 的 ish_rootfs() 挂完 fakefs 会调它。原实现在
-// deps/ish/app/CurrentRoot.m，但那个文件同时 #import <Foundation/Foundation.h>
-// 和 #include "kernel/calls.h"：在 kernel=linux 真内核模式下后者是完整 Linux
-// 内核头，两套头必然撞（__attribute__ 被重定义、成片 typedef redefinition）。
+// 交互会话（pty + /bin/sh -i）
 //
-// 那个函数只做一件事：读 /ish/version 判断 rootfs 版本、需要时跑迁移。我们的
-// rootfs 是整包固定打进去的，不存在跨版本迁移，空实现语义上就够了。
-void FsInitialize(void) {
-}
-
+// 流程照抄 app/TerminalViewController.m 的 kernel=ish 分支：
+//   become_new_init_child → pty_open_fake → create_stdio("/dev/pts/N")
+//   → do_execve → task_start
+//
+// 数据流：
+//   输出  guest 写 pts/N → fs/tty.c:tty_write → npc_tty_ops.write → npc_out_cb
+//   输入  App → tty_input(slave, bytes) → 进 slave 的输入缓冲 → guest read()
+//
+// 注意 pty_open_fake 把 npc_pty_driver.ttys 指向 pty_slave.ttys，
+// 所以 /dev/pts/N 打开时拿到的 tty->driver 就是我们这套 ops（open 为空，
+// 绕过 pty_slave_open 的 locked 检查）。
 // ---------------------------------------------------------------------------
-// 交互会话
-// ---------------------------------------------------------------------------
-
-static int spawn_session(void) {
-    // 必须 static：下面的 block 要引它，而 C 的 block 是按值捕获，
-    // 数组类型不能被捕获（cannot refer to declaration with an array type
-    // inside block）。静态存储期改成按地址引用就没这个问题。
-    static const char *argv[] = {"/bin/sh", NULL};
-
-    pthread_mutex_lock(&g_post_lock);
-
-    pthread_mutex_lock(&g_claim_m);
-    g_claim_want = 1;
-    g_claim_done = 0;
-    pthread_mutex_unlock(&g_claim_m);
-
-    async_do_in_workqueue(^{
-        linux_start_session("/bin/sh", argv, kEnv, ^(int retval, int pid, nsobj_t terminal) {
-            (void) retval;
-            (void) pid;
-            (void) terminal;
-            pthread_mutex_lock(&g_lock);
-            g_session_dead = 1;   // sh 退出 = 会话结束
-            pthread_mutex_unlock(&g_lock);
-        });
-    });
-
-    // 等内核线程把 pty 建出来并认领。以前不等，紧接着就把 claim 置 0，
-    // 于是交互会话永远拿不到 is_session，它吐的每个字节都被丢掉——
-    // 终端一片空白就是这么来的。
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 8;
-    pthread_mutex_lock(&g_claim_m);
-    while (!g_claim_done) {
-        if (pthread_cond_timedwait(&g_claim_c, &g_claim_m, &ts) != 0) break;
-    }
-    int ok = g_claim_done;
-    g_claim_want = 0;
-    pthread_mutex_unlock(&g_claim_m);
-
-    pthread_mutex_unlock(&g_post_lock);
-    return ok ? 0 : -2;
-}
 
 int npc_linux_session_open(void) {
     if (!g_alive) return -1;
-    if (g_session_term && !g_session_dead) return 0;
+
+    pthread_mutex_lock(&g_lock);
+    int already = (g_session_tty != NULL && !g_session_dead);
+    pthread_mutex_unlock(&g_lock);
+    if (already) return 0;
+
+    struct task *saved = current;
+    if (become_new_init_child() < 0) {
+        current = saved;
+        return -2;
+    }
+    struct task *task = current;
+    int pid = (int) task->pid;
+
+    struct tty *tty = pty_open_fake(&npc_pty_driver);
+    if (IS_ERR(tty)) {
+        current = saved;
+        return -2;
+    }
+
+    char stdioPath[NPC_STDIO_PATH];
+    snprintf(stdioPath, sizeof(stdioPath), "/dev/pts/%d", tty->num);
+
+    // create_stdio 内部会 generic_open("/dev/pts/N") → tty_get，refcount 变 2，
+    // 并把 tty 设成这个进程的控制终端（tty_open 里 sid == pid 时自动做）
+    if (create_stdio(stdioPath, TTY_PSEUDO_SLAVE_MAJOR, (int) tty->num) < 0) {
+        tty_release(tty);
+        current = saved;
+        return -2;
+    }
+
+    static const char kShellArgv[] = "/bin/sh\0-i\0";
+    int err = do_execve("/bin/sh", 2, kShellArgv, kEnv);
+    if (err < 0) {
+        tty_release(tty);
+        current = saved;
+        return -2;
+    }
+
+    // 这里必须先把句柄交出去、把 pty_open_fake 那份引用还掉，再 task_start。
+    // 反过来的话：进程可能瞬间退出 → exit_hook 清 g_session_tty → 我们再
+    // tty_release 就是对已 free 的 tty 操作。
+    // 还掉之后 refcount = 1（fd 那份），tty 由 guest 的 stdio fd 保活；
+    // 进程退出时 fd 关闭 → refcount 归零 → 内核回收。
+    pthread_mutex_lock(&g_lock);
+    g_session_tty = tty;
+    g_session_pid = pid;
     g_session_dead = 0;
-    return spawn_session();
+    pthread_mutex_unlock(&g_lock);
+
+    tty_release(tty);
+
+    task_start(task);
+    current = saved;
+    return 0;
 }
 
 int npc_linux_session_alive(void) {
-    return (g_session_term != NULL) && !g_session_dead;
+    pthread_mutex_lock(&g_lock);
+    int alive = (g_session_tty != NULL) && !g_session_dead;
+    pthread_mutex_unlock(&g_lock);
+    return alive;
+}
+
+// 取 session tty 并临时加一份引用，避免 exit_hook 在我们用它的同时把
+// refcount 放掉导致 tty 被 free。用完必须 tty_release。
+static struct tty *session_tty_retain(void) {
+    pthread_mutex_lock(&g_lock);
+    struct tty *t = g_session_tty;
+    if (t != NULL && !g_session_dead) {
+        lock(&t->lock);
+        t->refcount++;
+        unlock(&t->lock);
+    } else {
+        t = NULL;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return t;
 }
 
 int npc_linux_session_write(const char *bytes, int len) {
     if (!bytes || len <= 0) return -1;
+    struct tty *tty = session_tty_retain();
+    if (!tty) return -1;
 
-    pthread_mutex_lock(&g_lock);
-    struct npc_term *t = (struct npc_term *) g_session_term;
-    struct linux_tty *ltty = (t && t->used) ? t->ltty : NULL;
-    pthread_mutex_unlock(&g_lock);
-
-    if (!ltty) return -1;
-    return npc_pty_write(ltty, bytes, (size_t) len);
+    // tty_input 是「App 侧送键盘」的入口。blocking=false：终端页不能卡在
+    // 内核缓冲满的时候，宁可丢几个按键。
+    ssize_t n = tty_input(tty, bytes, (size_t) len, false);
+    tty_release(tty);
+    return (n < 0) ? -1 : (int) n;
 }
 
 int npc_linux_session_resize(int cols, int rows) {
-    pthread_mutex_lock(&g_lock);
-    struct npc_term *t = (struct npc_term *) g_session_term;
-    struct linux_tty *ltty = (t && t->used) ? t->ltty : NULL;
-    pthread_mutex_unlock(&g_lock);
+    struct tty *tty = session_tty_retain();
+    if (!tty) return -1;
 
-    if (!ltty) return -1;
-    async_do_in_workqueue(^{
-        // 进内核再取一次：这中间 pty 可能已经被回收，闭包里带着旧指针会踩空
-        pthread_mutex_lock(&g_lock);
-        struct npc_term *t2 = (struct npc_term *) g_session_term;
-        struct linux_tty *l = (t2 && t2->used) ? t2->ltty : NULL;
-        pthread_mutex_unlock(&g_lock);
-        if (l && l->ops && l->ops->resize) l->ops->resize(l, cols, rows);
-    });
+    struct winsize_ ws = {
+        .row = (word_t) rows,
+        .col = (word_t) cols,
+        .xpixel = 0,
+        .ypixel = 0,
+    };
+    // tty_set_winsize 内部会给前台进程组发 SIGWINCH（fs/tty.c:792），
+    // 这里不用自己发 —— 而且 tty->session 是个 pid，不是 task 指针。
+    tty_set_winsize(tty, ws);
+    tty_release(tty);
     return 0;
 }

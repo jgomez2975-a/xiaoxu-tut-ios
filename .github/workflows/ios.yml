@@ -53,16 +53,25 @@ jobs:
           # 直接跑 iSH ARM64 分支自带的探测脚本，它过了 VDSO 就一定编得出来
           bash deps/ish/vdso/arm64/check-cc-arm64.sh /opt/homebrew/opt/llvm/bin/clang
 
-      # 交叉编译 iSH 的 Linux 内核（ARM64 guest）。第一次要 20-40 分钟，之后有缓存会快很多。
+      # 编译 iSH 内置内核（kernel=ish，ARM64 guest）。
+      #
+      # 注意这里不是 kernel=linux：那条路要把 ish-app/linux 的源码 clone 下来
+      # 用 Kbuild 编几千个文件，而它的 App 侧桥接 linux/emu_asbestos.c 只有
+      # x86 版本，guest_arch=arm64 直接编译不过。AzTuT（Minis）走的是
+      # kernel=ish，我们跟它对齐。
+      # kernel=ish 不需要 clone Linux 源码，首次约 3-8 分钟。
+      #
+      # 缓存 key 里带 kish：这个目录跟 kernel=linux 的 build-ios 不兼容，
+      # 复用旧缓存会让 ninja 找不到目标。
       - name: 缓存 iSH 构建
         uses: actions/cache@v4
         with:
           path: deps/ish/build-ios
-          key: ish-arm64-v1-${{ runner.os }}-${{ hashFiles('deps/ish/meson.build') }}
+          key: ish-arm64-kish-v1-${{ runner.os }}-${{ hashFiles('deps/ish/meson.build') }}
 
       - name: 编译 iSH 内核
         run: bash Tools/build_ish.sh
-        timeout-minutes: 90
+        timeout-minutes: 40
 
       # 打包直接走 build_ipa.sh，跟本地一条路径：它会重生成工程、编 Release、
       # 自检扩展/rootfs/内核符号/权限文案/18 种 .lproj，任何一项不过就 exit 1。

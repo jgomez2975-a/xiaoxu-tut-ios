@@ -27,12 +27,17 @@ DEPLOY = "16.0"
 SWIFT = "5.0"
 
 # 内核静态库在不在，决定整个工程是"真能跑 Linux"还是"界面占位"。
-# 这里分 4 个库链接，不做 libtool 合并：内核里有几十组同名目标文件
-# （init/main.o 与 drivers/base/firmware_loader/main.o、fs/proc/version.o
-# 与 init/version.o、一堆 util.o / sync.o…），libtool 合并会按成员名去重，
-# 把后加入的那份丢掉。run_kernel 就在 init/main.o 里，一合并就丢。
-KERNEL_LIBS = ["liblinux.a", "libfakefs.a", "libish_emu.a",
-               "liblinux_user.a", "libiSHApp.a"]
+#
+# kernel=ish（对齐 AzTuT/OpenMinis）的产物就是这 4 个：
+#   libish.a        iSH 内置内核（kernel/ + fs/ + util/）
+#   libish_emu.a    Asbestos 模拟器（guest ARM64 → host ARM64 gadget）
+#   libfakefs.a     fakefs 的 sqlite 层
+#   libNpcLinux.a   我们的 C 胶水层（NpcLinux.c）
+#
+# 分开放、不做 libtool 合并：内核里有几十组同名目标文件（fs/proc/version.o
+# 与 init/version.o、一堆 util.o / sync.o…），libtool 按成员名去重会丢掉后
+# 加入的那份，链接时报 undefined symbol。
+KERNEL_LIBS = ["libish.a", "libish_emu.a", "libfakefs.a", "libNpcLinux.a"]
 KERNEL_LIB = os.path.join(ROOT, "Vendor", KERNEL_LIBS[0])
 HAS_KERNEL = os.path.isfile(KERNEL_LIB)
 
@@ -126,7 +131,7 @@ def walk_app():
                 srcs.append(rel)
             elif f.endswith(".c"):
                 if HAS_KERNEL:
-                    # NpcLinux.c 由 Tools/build_ish.sh 编进 Vendor/libiSHApp.a，
+                    # NpcLinux.c 由 Tools/build_ish.sh 编进 Vendor/libNpcLinux.a，
                     # 工程里再编一次会 duplicate symbol（npc_linux_boot 等）。
                     if f == "NpcLinux.c":
                         continue
@@ -182,9 +187,9 @@ def main():
     for e in EXTENSIONS:
         print("扩展 %-20s 源文件 %d" % (e["name"], len(ext_srcs[e["name"]])))
     if HAS_KERNEL:
-        print("检测到 Vendor/liblinux.a 等 4 个内核库 —— 启用内置 Linux 内核")
+        print("检测到 Vendor/libish.a 等 4 个内核库 —— 启用内置 Linux 内核（kernel=ish ARM64）")
     else:
-        print("没有 Vendor/liblinux.a —— 终端走占位实现（先跑 Tools/build_ish.sh）")
+        print("没有 Vendor/libish.a —— 终端走占位实现（先跑 Tools/build_ish.sh）")
 
     L = []
     w = L.append

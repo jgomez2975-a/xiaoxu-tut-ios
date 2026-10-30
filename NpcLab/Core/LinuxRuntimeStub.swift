@@ -2,10 +2,10 @@
 //  LinuxRuntimeStub.swift
 //  NpcLab
 //
-//  没有 libishkernel.a 时的替身。存在的意义只有一个：让工程在没编内核的机器上
+//  没有 Vendor/libish.a 时的替身。存在的意义只有一个：让工程在没编内核的机器上
 //  也能编译、能跑界面、能调 UI——而不是满屏 "symbol not found"。
 //
-//  Tools/gen_xcodeproj.py 会在 Vendor/libishkernel.a 存在时自动把本文件踢出编译，
+//  Tools/gen_xcodeproj.py 会在 Vendor/libish.a 存在时自动把本文件踢出编译，
 //  换成真的 LinuxRuntime.swift。两个文件永远只会进一个。
 //
 
