@@ -358,7 +358,7 @@ struct ProviderInstance: Identifiable, Hashable, Codable {
     }
 
     static let providerTypes: [String] = [
-        "openai", "anthropic", "openRouter", "xAI", "gemini", "kimiCode"
+        "openai", "anthropic", "openRouter", "xAI", "gemini", "kimiCode", "githubCopilot"
     ]
 }
 

@@ -378,6 +378,30 @@ final class AppSettings: ObservableObject {
         saveLogs()
     }
 
+    /// 保存 / 新增服务商后自动拉一次 /models：填了中转站和 key 且还没列表时。
+    /// 拉回来就把模型变成下拉可选；拉不到静默跳过（用户还能手填模型 ID）。
+    func autoFetchModels(for id: UUID) {
+        guard let idx = providers.firstIndex(where: { $0.id == id }) else { return }
+        let prov = providers[idx]
+        guard prov.models.isEmpty else { return }
+        let key = prov.apiKey.trimmingCharacters(in: .whitespaces)
+        let base = prov.baseURL.trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty, !base.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                let list = try await ModelCatalog.fetch(prov)
+                guard !list.isEmpty, let i = providers.firstIndex(where: { $0.id == id }) else { return }
+                providers[i].models = list
+                if !list.contains(providers[i].model) {
+                    providers[i].model = list[0]
+                }
+                log("模型", "自动获取到 \(list.count) 个模型（\(prov.name.isEmpty ? prov.providerLabel : prov.name)）")
+            } catch {
+                // 拉不到就算了，不打断用户
+            }
+        }
+    }
+
     func resetChat() {
         messages = []
         save()
