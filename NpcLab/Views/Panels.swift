@@ -72,6 +72,333 @@ struct PermPanel: View {
 
 struct HostPanel: View {
     @EnvironmentObject var st: AppSettings
+
+    @State private var newPath = ""
+    @State private var msg = ""
+
+    var body: some View {
+        PanelShell(title: "宿主访问",
+                   sub: "授权手机本机文件给 AI 读写；跟 PC 节点的授权根是两回事") {
+
+            // ===== 总开关 =====
+            SectionTitle(text: "总开关")
+            Card(padding: 0) {
+                VStack(spacing: 0) {
+                    RadioRow(color: T.txt3, symbol: "lock.slash",
+                             title: "全部关闭",
+                             sub: "AI 无法访问任何宿主文件，只能用已复制到沙盒的内容",
+                             selected: st.hostAccessMode == "off") {
+                        setMode("off")
+                    }
+                    RowDivider()
+                    RadioRow(color: T.accent, symbol: "hand.raised",
+                             title: "逐项授权",
+                             sub: "AI 访问未授权位置时弹窗确认；已授权位置直接可用",
+                             selected: st.hostAccessMode == "ask") {
+                        setMode("ask")
+                    }
+                    RowDivider()
+                    RadioRow(color: T.green, symbol: "checkmark.shield",
+                             title: "授权项自动放行",
+                             sub: "已打开开关的位置全部直接可用，不再询问",
+                             selected: st.hostAccessMode == "always") {
+                        setMode("always")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            SectionFootnote(text: "「全部关闭」会立即撤销所有已授权位置。切到该档后 AI 无法读取任何宿主文件。")
+
+            // ===== 全盘访问 =====
+            SectionTitle(text: "全盘访问")
+            Card(padding: 0) {
+                VStack(spacing: 0) {
+                    IconToggleRow(color: T.orange, symbol: "internaldrive",
+                                  title: "全盘访问（读写）",
+                                  sub: "开启后 AI 可读写手机上任意路径，包含越狱目录与其 App 容器",
+                                  on: $st.hostFullDisk)
+                    RowDivider()
+                    IconToggleRow(color: T.teal, symbol: "lock.doc",
+                                  title: "写保护",
+                                  sub: "全盘访问下只放读；写只给已授权且设为读写的位置",
+                                  on: $st.hostWriteProtect)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            SectionFootnote(text: "这是最省事的用法：开这一个就够。想精确控制时，关掉它改用下面的逐项授权。")
+
+            // ===== 一键授权 =====
+            SectionTitle(text: "一键授权")
+            Card {
+                VStack(spacing: 10) {
+                    Button {
+                        grantAll()
+                    } label: {
+                        Text("一键授权全部位置（读写）")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                            .background(canAuthorize ? T.accent : T.card)
+                            .foregroundColor(canAuthorize ? .white : T.txt3)
+                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canAuthorize)
+
+                    Button {
+                        revokeAll()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "xmark.circle").font(.system(size: 12, weight: .semibold))
+                            Text("撤销全部").font(.system(size: 14, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(T.card)
+                        .foregroundColor(st.hostGrants.isEmpty ? T.txt3 : T.red)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(st.hostGrants.isEmpty)
+
+                    HStack(spacing: 0) {
+                        Text(grantSummary).font(.system(size: 11.5)).foregroundColor(T.txt3)
+                        Spacer()
+                    }
+                }
+            }
+            SectionFootnote(text: "一次性把下面所有位置（含自定义）设为读写。不存在的路径会自动跳过，不影响其它项。总开关为「全部关闭」时不可用。")
+
+            // ===== 自定义路径 =====
+            SectionTitle(text: "自定义路径")
+            Card {
+                HStack(spacing: 8) {
+                    TextField("/var/mobile/…  任意宿主路径", text: $newPath)
+                        .font(T.mono(11.5))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .padding(.horizontal, 10).padding(.vertical, 9)
+                        .glass(8)
+                        .onSubmit { addCustom() }
+                    Button {
+                        addCustom()
+                    } label: {
+                        Image(systemName: "plus").font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(canAuthorize ? T.accent : T.txt3)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canAuthorize)
+                }
+                if !msg.isEmpty {
+                    Text(msg).font(.system(size: 10.5)).foregroundColor(T.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            SectionFootnote(text: "填任意宿主绝对路径并添加。它会和内置位置一样出现在下面的列表里，可单独设只读或读写。总开关为「全部关闭」时不可用。")
+
+            // ===== 已授权列表 =====
+            SectionTitle(text: "已授权位置")
+            Card(padding: 0) {
+                if st.hostGrants.isEmpty {
+                    HStack {
+                        Text("还没有授权任何位置。点上面「一键授权全部位置」最省事。")
+                            .font(.system(size: 11.5)).foregroundColor(T.txt3)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 11)
+                } else {
+                    VStack(spacing: 0) {
+                        // 按 id 枚举，不用 indices —— 删一项时 indices 会错位，
+                        // 轻则删错行，重则越界崩。
+                        ForEach(Array(st.hostGrants.enumerated()), id: \.element.id) { item in
+                            grantRow(item.element)
+                            if item.offset < st.hostGrants.count - 1 { RowDivider() }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+
+            // ===== 节点授权根（原来那一套，独立子页）=====
+            SectionTitle(text: "PC 节点")
+            Card(padding: 0) {
+                NavigationLink { NodeHostPanel() } label: {
+                    NavRow(color: Color(white: 0.55), symbol: "desktopcomputer",
+                           title: "节点授权根",
+                           sub: "授权电脑上的目录给 AI 读，走 /api/host/*，跟本机是两套",
+                           value: st.hostRoots.isEmpty ? "未设置" : "\(st.hostRoots.count) 项")
+                }.buttonStyle(.plain)
+            }
+        }
+        .onAppear { refreshMsg() }
+    }
+
+    // MARK: - 行
+
+    @ViewBuilder
+    private func grantRow(_ g: HostGrant) -> some View {
+        let exists = HostFS.exists(g.path)
+        HStack(spacing: 8) {
+            Image(systemName: g.mode == "rw" ? "pencil.and.outline" : "eye")
+                .font(.system(size: 11))
+                .foregroundColor(exists ? T.accent : T.txt3)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(g.builtin && !g.title.isEmpty ? g.title : g.path)
+                        .font(.system(size: 12.5)).foregroundColor(T.txt)
+                        .lineLimit(1)
+                    if !exists {
+                        Text("不存在").font(.system(size: 9.5))
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(T.orange.opacity(0.18))
+                            .foregroundColor(T.orange)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
+                Text(g.path).font(T.mono(9.5)).foregroundColor(T.txt3)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+
+            Spacer(minLength: 6)
+
+            Button {
+                toggleMode(g.id)
+            } label: {
+                Pill(text: g.mode == "rw" ? "读写" : "只读",
+                     color: g.mode == "rw" ? T.orange : T.txt3)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                removeGrant(g.id)
+            } label: {
+                Image(systemName: "trash").font(.system(size: 11))
+                    .foregroundColor(T.red.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+    }
+
+    private func toggleMode(_ id: UUID) {
+        guard let i = st.hostGrants.firstIndex(where: { $0.id == id }) else { return }
+        st.hostGrants[i].mode = (st.hostGrants[i].mode == "rw" ? "ro" : "rw")
+        refreshMsg()
+    }
+
+    private func removeGrant(_ id: UUID) {
+        guard let i = st.hostGrants.firstIndex(where: { $0.id == id }) else { return }
+        let p = st.hostGrants[i].path
+        st.hostGrants.remove(at: i)
+        st.log("宿主", "撤销授权 \(p)")
+        refreshMsg()
+    }
+
+    // MARK: - 状态
+
+    private var canAuthorize: Bool { st.hostAccessMode != "off" }
+
+    private var grantSummary: String {
+        let n = st.hostGrants.count
+        guard n > 0 else { return "已授权 0 项" }
+        let rw = st.hostGrants.filter { $0.mode == "rw" }.count
+        let ro = n - rw
+        if ro == 0 { return "已授权 \(n) 项（读写）" }
+        if rw == 0 { return "已授权 \(n) 项（只读）" }
+        return "已授权 \(n) 项（读写 \(rw) · 只读 \(ro)）"
+    }
+
+    private func refreshMsg() {
+        if st.hostAccessMode == "off" {
+            msg = ""
+        }
+    }
+
+    // MARK: - 操作
+
+    private func setMode(_ m: String) {
+        st.hostAccessMode = m
+        // 「全部关闭」立即撤销所有已授权位置（对齐 AzTuT 那句说明）
+        if m == "off" {
+            let n = st.hostGrants.count
+            st.hostGrants.removeAll()
+            st.hostFullDisk = false
+            st.log("宿主", "切到全部关闭，撤销 \(n) 项授权")
+        }
+        refreshMsg()
+    }
+
+    /// 一键授权：内置位置（探活通过）+ 用户已经加过的自定义路径，全部设成读写。
+    /// 不存在的路径直接跳过 —— 越狱目录在非越狱设备上本来就 stat 不到。
+    private func grantAll() {
+        var grants: [HostGrant] = []
+        var skipped = 0
+
+        for p in HostFS.presets {
+            guard HostFS.exists(p.path) else { skipped += 1; continue }
+            grants.append(HostGrant(path: p.path, mode: "rw",
+                                    builtin: true, title: p.title))
+        }
+
+        // 保留用户自定义的那些（内置的会被上面重建，别重复）
+        for g in st.hostGrants where !g.builtin {
+            if HostFS.exists(g.path) {
+                grants.append(HostGrant(path: g.path, mode: "rw",
+                                        builtin: false, title: g.title))
+            } else {
+                skipped += 1
+            }
+        }
+
+        st.hostGrants = grants
+        if st.hostAccessMode == "off" { st.hostAccessMode = "always" }
+        msg = "已授权 \(grants.count) 项" + (skipped > 0 ? "，跳过 \(skipped) 项不存在的路径" : "")
+        st.log("宿主", "一键授权 \(grants.count) 项，跳过 \(skipped)")
+    }
+
+    private func revokeAll() {
+        let n = st.hostGrants.count
+        st.hostGrants.removeAll()
+        msg = "已撤销 \(n) 项"
+        st.log("宿主", "撤销全部 \(n) 项")
+    }
+
+    private func addCustom() {
+        let raw = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return }
+        guard canAuthorize else {
+            msg = "总开关是「全部关闭」，先切到逐项授权或自动放行"
+            return
+        }
+        let p = HostFS.canonical(raw)
+        guard !p.isEmpty else {
+            msg = "要填绝对路径，例如 /var/mobile/Documents"
+            return
+        }
+        if st.hostGrants.contains(where: { $0.path == p }) {
+            msg = "这个路径已经在列表里了"
+            return
+        }
+
+        let exists = HostFS.exists(p)
+        st.hostGrants.append(HostGrant(path: p, mode: "rw", builtin: false, title: ""))
+        newPath = ""
+        msg = exists
+            ? "已加入 \(p)"
+            : "已加入 \(p)，但当前读不到（越狱目录需要越狱设备，或路径不存在）"
+        st.log("宿主", "新增自定义路径 \(p) exists=\(exists)")
+    }
+}
+
+/// PC 节点上的授权根 —— 原来 HostPanel 的主体搬到这里。
+/// 入口：「宿主访问 → PC 节点 → 节点授权根」。
+/// 跟本机宿主访问完全是两套东西：这里授权的是**电脑上**的目录。
+struct NodeHostPanel: View {
+    @EnvironmentObject var st: AppSettings
     @EnvironmentObject var hub: NodeHub
 
     @State private var newPath = ""
@@ -81,7 +408,7 @@ struct HostPanel: View {
     @State private var msg = ""
 
     var body: some View {
-        PanelShell(title: "宿主访问", sub: "授权根写在节点侧；这里只是决定 AI 能不能用") {
+        PanelShell(title: "节点授权根", sub: "授权根写在节点侧；这里只是决定 AI 能不能用") {
             Card(padding: 0) {
                 ToggleRow(title: "允许读取", sub: "关闭后所有 /api/host/* 调用直接拒绝",
                           on: $st.allowFileRead)

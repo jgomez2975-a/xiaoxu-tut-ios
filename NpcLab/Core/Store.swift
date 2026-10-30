@@ -153,6 +153,21 @@ final class AppSettings: ObservableObject {
 
     // ---- 开发者 ----
     @Published var hostRoots: [HostRoot] = [] { didSet { save() } }
+
+    // ---- 本机宿主访问（对齐 AzTuT 的设置 → 开发者 → 宿主访问）----
+    //
+    // 注意跟上面 hostRoots 的区别：hostRoots 是**电脑**（PC 节点）上的目录白名单，
+    // 走 /api/host/*；下面这组管的是**手机本机**文件系统（/var/mobile、App 容器、
+    // 越狱目录），由 HostFS 执行。两套互不影响。
+    /// off / ask / always —— 对应「全部关闭 / 逐项授权 / 授权项自动放行」
+    @Published var hostAccessMode: String = "off" { didSet { save() } }
+    /// 全盘访问（读写）。开了就绕过逐项授权，任何路径都能读；写还要看写保护。
+    @Published var hostFullDisk: Bool = false { didSet { save() } }
+    /// 写保护：开着时全盘访问只给读，写必须落在已授权且为读写的位置上。
+    @Published var hostWriteProtect: Bool = true { didSet { save() } }
+    /// 已授权位置（本机路径）
+    @Published var hostGrants: [HostGrant] = [] { didSet { save() } }
+
     @Published var execShell: String = "sh" { didSet { save() } }
     @Published var execIdentity: String = "user" { didSet { save() } }   // user / admin / system
     @Published var execTimeout: Int = 60 { didSet { save() } }
@@ -216,6 +231,10 @@ final class AppSettings: ObservableObject {
         var allowExec: Bool?
         var allowProxy: Bool?
         var hostRoots: [HostRoot]?
+        var hostAccessMode: String?
+        var hostFullDisk: Bool?
+        var hostWriteProtect: Bool?
+        var hostGrants: [HostGrant]?
         var execShell: String?
         var execIdentity: String?
         var execTimeout: Int?
@@ -292,6 +311,10 @@ final class AppSettings: ObservableObject {
         if let v = b.allowExec { allowExec = v }
         if let v = b.allowProxy { allowProxy = v }
         if let v = b.hostRoots { hostRoots = v }
+        if let v = b.hostAccessMode { hostAccessMode = v }
+        if let v = b.hostFullDisk { hostFullDisk = v }
+        if let v = b.hostWriteProtect { hostWriteProtect = v }
+        if let v = b.hostGrants { hostGrants = v }
         if let v = b.execShell { execShell = v }
         if let v = b.execIdentity { execIdentity = v }
         if let v = b.execTimeout { execTimeout = v }
@@ -318,6 +341,8 @@ final class AppSettings: ObservableObject {
         b.faceIDLock = faceIDLock; b.allowFileRead = allowFileRead
         b.allowExec = allowExec; b.allowProxy = allowProxy
         b.hostRoots = hostRoots; b.execShell = execShell; b.execIdentity = execIdentity
+        b.hostAccessMode = hostAccessMode; b.hostFullDisk = hostFullDisk
+        b.hostWriteProtect = hostWriteProtect; b.hostGrants = hostGrants
         b.execTimeout = execTimeout; b.ghToken = ghToken; b.ghRepo = ghRepo
         b.ctxLimit = ctxLimit; b.autoCompact = autoCompact; b.toolLoop = toolLoop
         b.revTargets = revTargets; b.proxyRules = proxyRules; b.revEngine = revEngine

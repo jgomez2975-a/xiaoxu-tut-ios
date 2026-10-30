@@ -407,6 +407,32 @@ final class ToolAgent: ObservableObject {
              ["target"]))
         }
 
+        // ---- 本机宿主文件（设置 → 开发者 → 宿主访问）----
+        //
+        // 总开关是「全部关闭」时，这三个工具**根本不出现**在 tools 里 —— 跟上面
+        // 逆向那几个开关一个道理：AI 看不到就不会去调，比调了再回一句「未开启」干净。
+        // 权限判定在 HostFS.access(for:)，这里只负责把结果翻译成人话。
+        if st.hostAccessMode != "off" {
+            out.append(("host_ls",
+             "列手机本机某个目录。path 必须是绝对路径，例如 /var/mobile/Documents。" +
+             "这是手机上真实的文件系统，不是 Linux 模拟环境，也不是 PC 节点。",
+             ["path": ["type": "string", "description": "绝对路径"]],
+             ["path"]))
+
+            out.append(("host_read",
+             "读手机本机的一个文件。文本文件直接返回正文（超过 256KB 会截断并标注）；" +
+             "二进制文件只返回类型和开头 hex。需要「宿主访问」已授权该路径。",
+             ["path": ["type": "string", "description": "绝对路径"]],
+             ["path"]))
+
+            out.append(("host_write",
+             "写手机本机文件（会创建父目录）。只在「宿主访问」把该路径授权为读写时可用；" +
+             "全盘访问 + 写保护开着时会被拒。",
+             ["path": ["type": "string", "description": "绝对路径"],
+                     "text": ["type": "string", "description": "要写入的完整内容"]],
+             ["path", "text"]))
+        }
+
         return out
     }
 
@@ -603,8 +629,111 @@ final class ToolAgent: ObservableObject {
             return await RevLocal.shared.aiCapstone(target: target, arch: arch,
                                                     offset: off, count: cnt)
 
+        // ---- 本机宿主文件 ----
+        // 开关拨回「全部关闭」后，上一轮对话拿到的 tools 缓存里可能还留着这几个，
+        // 所以 execute 这边要再兜一次底，不能只靠 defs 过滤。
+        case "host_ls", "host_read", "host_write":
+            return await hostTool(c.name, a, st)
+
         default:
             return "未知工具：\(c.name)"
+        }
+    }
+
+    // MARK: - 本机宿主文件工具的实现
+
+    @MainActor
+    private static func hostTool(_ name: String, _ a: [String: Any],
+                                 _ st: AppSettings) async -> String {
+        if st.hostAccessMode == "off" {
+            return "宿主访问总开关是「全部关闭」，读不到任何宿主文件。"
+                + "需要用户到「设置 → 开发者 → 宿主访问」打开。"
+        }
+
+        let raw = (a["path"] as? String) ?? ""
+        let path = HostFS.canonical(raw)
+        guard !path.isEmpty else {
+            return "path 要填绝对路径，例如 /var/mobile/Documents。收到的是「\(raw)」"
+        }
+
+        let wantWrite = (name == "host_write")
+        let access = HostFS.access(for: path, wantWrite: wantWrite,
+                                  mode: st.hostAccessMode,
+                                  fullDisk: st.hostFullDisk,
+                                  writeProtect: st.hostWriteProtect,
+                                  grants: st.hostGrants)
+
+        if access == .none {
+            if wantWrite {
+                // 能读不能写是最常见的困惑，单独说清楚
+                let ro = HostFS.access(for: path, wantWrite: false,
+                                       mode: st.hostAccessMode,
+                                       fullDisk: st.hostFullDisk,
+                                       writeProtect: st.hostWriteProtect,
+                                       grants: st.hostGrants)
+                if ro != .none {
+                    return "「\(path)」只给了读权限。要写的话让用户到「宿主访问 → 已授权位置」"
+                        + "把这一项改成读写，或者关掉「写保护」。"
+                }
+            }
+            return HostFS.denyReason(mode: st.hostAccessMode)
+        }
+
+        switch name {
+        case "host_ls":
+            do {
+                let items = try HostFS.ls(path)
+                if items.isEmpty { return "\(path) 是空的（或全是隐藏文件）" }
+                var lines = ["\(path) 共 \(items.count) 项："]
+                // 先目录后文件，最多 300 条，免得把上下文撑爆
+                for e in items.prefix(300) {
+                    lines.append(e.isDir
+                                 ? "  \(e.name)/"
+                                 : "  \(e.name)  \(HostFS.sizeText(e.size))")
+                }
+                if items.count > 300 { lines.append("  …还有 \(items.count - 300) 项未列出") }
+                return lines.joined(separator: "\n")
+            } catch {
+                return "列目录失败：\(describe(error, path))"
+            }
+
+        case "host_read":
+            do {
+                let r = try HostFS.read(path)
+                return r.truncated ? r.text + "\n\n[已截断，文件超过 256KB]" : r.text
+            } catch {
+                return "读文件失败：\(describe(error, path))"
+            }
+
+        case "host_write":
+            let text = (a["text"] as? String) ?? ""
+            do {
+                try HostFS.write(path, text: text)
+                st.log("宿主", "AI 写入 \(path)（\(text.utf8.count) 字节）")
+                return "已写入 \(path)，\(text.utf8.count) 字节。"
+            } catch {
+                return "写文件失败：\(describe(error, path))"
+            }
+
+        default:
+            return "未知工具：\(name)"
+        }
+    }
+
+    /// 把 Cocoa 的错误翻译成对 AI 有用的信息 —— 尤其 EPERM，那是沙盒边界，
+    /// 不是路径写错了，说清楚它才不会反复换路径瞎试。
+    private static func describe(_ error: Error, _ path: String) -> String {
+        let ns = error as NSError
+        switch ns.code {
+        case NSFileReadNoPermissionError, NSFileWriteNoPermissionError:
+            return "没有权限访问「\(path)」。iOS 沙盒只允许读本 App 容器；"
+                + "/var/mobile、/var/containers 这些要越狱设备才能读。"
+        case NSFileNoSuchFileError, NSFileReadNoSuchFileError:
+            return "「\(path)」不存在。"
+        case NSFileReadTooLargeError:
+            return "文件太大，读不了。"
+        default:
+            return ns.localizedDescription
         }
     }
 

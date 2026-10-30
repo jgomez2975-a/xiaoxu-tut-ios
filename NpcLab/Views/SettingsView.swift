@@ -140,7 +140,7 @@ struct SettingsView: View {
                     RowDivider()
                     NavigationLink { HostPanel() } label: {
                         NavRow(color: T.purple, glyph: "盘", title: "宿主访问",
-                               sub: "让 AI 读取节点上的文件（授权根之外一律拒绝）")
+                               sub: "授权手机本机文件给 AI 读写；PC 节点的授权根在下一层")
                     }.buttonStyle(.plain)
                     RowDivider()
                     NavigationLink { TermPanel() } label: {

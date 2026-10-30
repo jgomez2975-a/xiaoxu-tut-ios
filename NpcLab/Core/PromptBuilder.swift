@@ -176,6 +176,28 @@ enum PromptBuilder {
             L.append("算力节点：未连接。没有 shell、没有逆向、没有抓包；"
                      + "只有对话、人设、技能库、文档与工具清单可用。不要假装能执行命令。")
         }
+
+        // 本机宿主文件跟节点无关，单独说 —— 节点没连也能用
+        switch st.hostAccessMode {
+        case "off":
+            L.append("本机宿主文件：总开关「全部关闭」，读不到手机上任何文件。")
+        default:
+            if st.hostFullDisk {
+                let w = st.hostWriteProtect ? "可读，写受写保护限制" : "可读写"
+                L.append("本机宿主文件：全盘访问已开（\(w)），任意绝对路径都能试。")
+            } else if st.hostGrants.isEmpty {
+                L.append("本机宿主文件：\(st.hostAccessMode == "ask" ? "逐项授权" : "自动放行")，"
+                         + "但还没有任何已授权位置。")
+            } else {
+                let rw = st.hostGrants.filter { $0.mode == "rw" }.count
+                let ro = st.hostGrants.count - rw
+                L.append("本机宿主文件：已授权 \(st.hostGrants.count) 项"
+                         + "（读写 \(rw) · 只读 \(ro)）—— "
+                         + st.hostGrants.map { $0.path }.joined(separator: "、")
+                         + "；越界路径会被拒绝。")
+            }
+        }
+
         return "<runtime os=\"ios\">\n\(L.joined(separator: "\n"))\n"
             + "只使用上面声明过的能力；没有声明的路径、工具、端点视为不存在。\n</runtime>"
     }
