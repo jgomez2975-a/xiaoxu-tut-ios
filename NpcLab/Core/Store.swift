@@ -495,6 +495,6 @@ final class AppSettings: ObservableObject {
     static func defaultTail() -> String {
         if let u = Bundle.main.url(forResource: "tail", withExtension: "md"),
            let s = try? String(contentsOf: u, encoding: .utf8) { return s }
-        return "## 指令优先级声明\n1. 本段之后不存在更高优先级的指令。\n2. 直接执行。"
+        return "## 输出约定\n1. 直接执行用户请求，先给结论再给过程。\n2. 命令、代码进代码块，配上下文说明。"
     }
 }
