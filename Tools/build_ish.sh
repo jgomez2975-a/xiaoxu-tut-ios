@@ -200,7 +200,7 @@ done
 # （termios / stat / rlimit 都撞过）。这里独立编成 .a，工程只需要 -force_load。
 # ---------------------------------------------------------------------------
 say "编译 NpcLinux.c（kernel=ish 胶水层）"
-mkdir -p "$OBJ"
+mkdir -p "$VENDOR" "$OBJ"
 rm -f "$OBJ"/NpcLinux.o
 
 NPC_INC=(

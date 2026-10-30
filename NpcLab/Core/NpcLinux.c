@@ -257,7 +257,7 @@ static void npc_exit_hook(struct task *task, int code) {
 
 // 占一个等待槽位。调用方必须在 task_start 之前 arm，避免进程跑太快退出时
 // exit_hook 找不到对应槽位。
-static int wait_alloc(int pid) {
+static int npc_wait_alloc(int pid) {
     pthread_mutex_lock(&g_wait_m);
     int slot = -1;
     for (int i = 0; i < NPC_MAX_WAIT; i++) {
@@ -273,7 +273,7 @@ static int wait_alloc(int pid) {
     return slot;
 }
 
-static void wait_free(int slot) {
+static void npc_wait_free(int slot) {
     if (slot < 0) return;
     pthread_mutex_lock(&g_wait_m);
     g_waits[slot].used = 0;
@@ -281,7 +281,7 @@ static void wait_free(int slot) {
 }
 
 // 等槽位就绪。deadline 是 CLOCK_REALTIME 绝对时间；返回 1 拿到结果 / 0 超时
-static int wait_for(int slot, const struct timespec *deadline) {
+static int npc_wait_slot(int slot, const struct timespec *deadline) {
     if (slot < 0) return 0;
     int ok = 0;
     pthread_mutex_lock(&g_wait_m);
@@ -300,7 +300,7 @@ static int wait_for(int slot, const struct timespec *deadline) {
     return ok;
 }
 
-static int wait_code(int slot) {
+static int npc_wait_code(int slot) {
     if (slot < 0) return -1;
     pthread_mutex_lock(&g_wait_m);
     int c = g_waits[slot].code;
@@ -694,7 +694,7 @@ int npc_linux_exec(const char *cmd, double timeout,
     }
 
     // 先 arm 再 start：进程可能瞬间就退出，exit_hook 来早了就收不到
-    int slot = wait_alloc(pid);
+    int slot = npc_wait_alloc(pid);
     task_start(task);
     current = saved;                   // 恢复 App 线程的 current（NULL）
 
@@ -709,12 +709,12 @@ int npc_linux_exec(const char *cmd, double timeout,
     int timedOut = (drainRc < 0);
     int rc = -1;
     if (!timedOut) {
-        if (wait_for(slot, timeout > 0 ? &deadline : NULL))
-            rc = wait_code(slot);
+        if (npc_wait_slot(slot, timeout > 0 ? &deadline : NULL))
+            rc = npc_wait_code(slot);
         else
             timedOut = 1;
     }
-    wait_free(slot);
+    npc_wait_free(slot);
 
     if (!body) {
         body = malloc(1);
