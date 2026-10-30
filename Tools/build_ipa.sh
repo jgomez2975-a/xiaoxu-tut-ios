@@ -156,20 +156,21 @@ if [ -f "$APP/alpine-rootfs.zip" ]; then
         || die "rootfs 架构与内核不匹配（见上），这个包出去也是点终端就闪退"
 fi
 
-# 4.3 真终端模式下，内核符号必须真的在可执行文件里。
-#     这几个是 kernel=ish 启动链的关键节点，缺哪个都活不过第一次进终端页：
-#       mount_root / become_first_process —— 内核启动
-#       do_execve / task_start             —— 起进程
-#       cpu_run_to_interrupt               —— 模拟器真正跑指令的地方
-#       npc_linux_boot                     —— 我们的胶水层入口
+# 4.3 真终端模式下，确认 -force_load 真的把内核拉进可执行文件了。
+#
+# 只查两个「必然外部可见」的符号：
+#   _npc_linux_boot   Swift 侧唯一入口，必须 global
+#   _gadget_load_reg  Asbestos 的汇编 gadget，LTO 不处理汇编符号，一定在
+#
+# 为什么不再查 become_first_process / do_execve / cpu_run_to_interrupt：
+# Release 开了 LTO（-object_path_lto），这些内核内部函数只被 NpcLinux.c 调用，
+# 会被内联成 local 甚至整个消失，nm -g（只看 global）必然查不到 —— 那是优化
+# 的结果，不是没链进去。真正的判据是链接器没报 undefined symbol。
 EXE="$APP/$APP_NAME"
 if [ "$KERNEL_MODE" = "real" ]; then
-    # 用 nm -g 而不是 nm -gU：-U 只列「未定义」符号，而这些内核入口都是
-    # 已定义的，带 -U 会全部误报成缺失。
-    NM_OUT="$(nm -g "$EXE" 2>/dev/null || true)"
-    for sym in _npc_linux_boot _mount_root _become_first_process \
-               _do_execve _task_start _cpu_run_to_interrupt; do
-        if echo "$NM_OUT" | grep -q " ${sym}$"; then
+    NM_ALL="$(nm "$EXE" 2>/dev/null || true)"
+    for sym in _npc_linux_boot _gadget_load_reg; do
+        if echo "$NM_ALL" | grep -qE "[TtDdBb] ${sym}$"; then
             echo "    ✓ $sym"
         else
             echo "    ✗ $sym 不在 $APP_NAME 里 —— -force_load 可能没生效"
