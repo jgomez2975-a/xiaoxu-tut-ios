@@ -249,6 +249,29 @@ for f in libish.a libish_emu.a libfakefs.a libNpcLinux.a; do
     printf "    %-20s %s\n" "$f" "$(du -h "$VENDOR/$f" | cut -f1)"
 done
 
+say "检查重复符号"
+# 静态库内部的重复定义在 meson/ninja 阶段完全不报，要等 Xcode 用 -force_load
+# 把它们全拉进可执行文件才炸 "4 duplicate symbols"，一轮 CI 就白跑。
+# 上游 iSH-ARM64 本身踩过这个坑：bits.S 和 math.S 都定义了 sxtw/uxtb/uxth/rev32，
+# 而 gen.c 发的是 math.S 的协议（gadget 地址 + sf 参数），bits.S 那份简化版不读
+# 参数，一旦被链上会让 code stream 错位 —— 所以已从 bits.S 删掉，这里也加个守卫。
+DUP_FOUND=0
+for lib in "$ISH_LIB" "$EMU_LIB" "$FAKEFS_LIB"; do
+    # NF==3 过滤掉 "libxxx.a(member.o):" 这种成员头行
+    dup="$(nm -g "$lib" 2>/dev/null \
+        | awk 'NF==3 && $2 ~ /^[TDBSRC]$/ {print $3}' \
+        | sort | uniq -d)"
+    if [ -n "$dup" ]; then
+        echo "    ✗ $(basename "$lib") 有重复符号："
+        echo "$dup" | sed 's/^/        /'
+        DUP_FOUND=1
+    fi
+done
+if [ "$DUP_FOUND" != "0" ]; then
+    die "静态库内部有重复符号，Xcode 链接一定会报 duplicate symbol（见上）"
+fi
+echo "    三个库内部均无重复符号"
+
 say "检查关键符号"
 # 注意用 nm -g 而不是 nm -gU：macOS 的 -U 只列「未定义」符号。
 # mount_root / become_first_process 在内核里没人显式引用（只有我们的胶水层调），

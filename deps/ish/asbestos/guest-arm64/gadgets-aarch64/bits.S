@@ -103,22 +103,6 @@
     mov _tmp, x0
     gret
 
-// SXTW Xd, Wn - Sign extend word
-.gadget sxtw
-    sxtw _tmp, w0
-    gret
-
-// UXTB Xd, Wn - Zero extend byte
-.gadget uxtb
-    uxtb w0, w0
-    mov _tmp, x0
-    gret
-
-// UXTH Xd, Wn - Zero extend halfword
-.gadget uxth
-    uxth w0, w0
-    mov _tmp, x0
-    gret
 
 /*
  * Bit counting operations
@@ -157,11 +141,6 @@
 // REV Xd, Xn - Reverse bytes
 .gadget rev64
     rev _tmp, _tmp
-    gret
-
-.gadget rev32
-    rev w0, w0
-    mov _tmp, x0
     gret
 
 // REV16 Xd, Xn - Reverse bytes in halfwords
