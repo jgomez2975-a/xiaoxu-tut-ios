@@ -64,7 +64,7 @@ enum SkillList {
     }
 
     /// 归一化：小写、去空白与标点，只留字母数字（含中文）。
-    private static func normalize(_ s: String) -> String {
+    static func normalize(_ s: String) -> String {
         let alnum = CharacterSet.alphanumerics
         var out = ""
         for ch in s.lowercased() {
@@ -73,5 +73,39 @@ enum SkillList {
             }
         }
         return out
+    }
+}
+
+/// 「写小说 / 写作文 / 露骨」这类文学创作请求的检测。
+///
+/// 为什么单独检测：创作请求不需要工具循环，也不需要技能/工具/运行时这些
+/// 「黑客工具」上下文。deepseek v4.1 在逆向/渗透/免杀 + CTF 的上下文里对
+/// 露骨内容拒绝得更坚决；换成干净人设 + 纯流式，拒绝阈值回到默认，就能写。
+/// Minis 的 system prompt 是中性「AI 助手 + Linux shell」，没有攻击性上下文，
+/// 所以同样的人格/技能它不拒绝。
+enum CreativeDetector {
+    static func isCreative(_ text: String) -> Bool {
+        let t = SkillList.normalize(text)
+        guard !t.isEmpty else { return false }
+
+        // 成人/露骨信号：几乎必然是创作请求，直接命中
+        let adult = [
+            "露骨", "情色", "色情", "黄色", "成人", "隐私部位", "性描写",
+            "肉文", "18禁", "r18", "nsfw", "污文", "黄文", "色文", "h文",
+            "小黄文", "小h文", "开车"
+        ]
+        if adult.contains(where: { t.contains($0) }) { return true }
+
+        // 文学宾语 + 创作动词：写小说 / 编故事 / 创作剧本 / 写作文…
+        let literary = [
+            "小说", "故事", "作文", "文章", "诗", "歌词", "童话", "剧本",
+            "同人", "段子", "文案", "情书", "短文", "小短文", "情话"
+        ]
+        let verbs = ["写", "编", "创作", "续写", "描写", "构思"]
+        if literary.contains(where: { t.contains($0) })
+            && verbs.contains(where: { t.contains($0) }) {
+            return true
+        }
+        return false
     }
 }

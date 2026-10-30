@@ -43,6 +43,27 @@ enum PromptBuilder {
         return out
     }
 
+    /// 创作类请求的干净 system prompt：只有人设，不带技能/工具/运行时/ops-notes。
+    /// 剥离「逆向/渗透/免杀/CTF」这些黑客上下文，让模型回到中性创作状态，
+    /// 对齐 Minis「capable AI assistant」的中性身份。
+    static func creativeSystem(_ st: AppSettings) -> String {
+        let f = Soul.parse(st.persona)
+        let name = f.meta.name.trimmingCharacters(in: .whitespaces).isEmpty
+            ? "Npc" : f.meta.name.trimmingCharacters(in: .whitespaces)
+        let style = f.meta.style.trimmingCharacters(in: .whitespaces)
+
+        var out = "你是 \(name)，一个写作能力强、直接回答的 AI 助手。"
+            + "用户用哪种语言，你就用哪种语言；默认简体中文。"
+        let body = f.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !body.isEmpty, !Soul.weight(body).over {
+            out += "\n\n你的性格与语气（Personality）：\n" + Soul.scrub(body)
+        }
+        if !style.isEmpty {
+            out += "\n\n回复风格（Response style）：\n" + style
+        }
+        return out
+    }
+
     // MARK: Layer 2
 
     static func esc(_ s: String) -> String {

@@ -386,6 +386,15 @@ struct ChatView: View {
                         }
                         draft = ""
                         pendingImages = []
+                        // 创作类请求：纯对话 + 干净人设，不进工具循环、不注入
+                        // 技能/工具/运行时这些「逆向/渗透/免杀」黑客上下文。
+                        // 这些上下文会让 deepseek 对露骨创作更警惕；干净人设
+                        // 对齐 Minis 的中性对话，拒绝阈值回到默认。
+                        if CreativeDetector.isCreative(t) {
+                            engine.send(st, system: PromptBuilder.creativeSystem(st),
+                                        text: t, images: imgs)
+                            return
+                        }
                         // 按这句话重新挑 20 条技能，而不是用空 query 预拼的那份
                         let sys = PromptBuilder.assemble(st, bridge: hub.state, query: t).full
                         if useTools {
